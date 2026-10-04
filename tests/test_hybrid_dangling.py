@@ -91,7 +91,43 @@ def test_hybrid_skips_dangling_thread_root(
 
     assert all(hit.document_id != "dangling-root-id" for hit in response.results)
     assert {hit.document_id for hit in response.results} >= {"msg-reply-1", "msg-root-valid"}
-    assert isinstance(response.partial_warnings, list)
+    # Inner-join fix filters the dangling root in SQL, before fusion, so the
+    # normal path must produce no warnings (warning path tested separately).
+    assert response.partial_warnings == []
+
+
+def test_hybrid_defense_drops_missing_fused_id(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Post-fusion filter drops injected missing IDs with a warning."""
+    from slackquery import retrieval as retrieval_module
+
+    ext_dir = tmp_path / "extensions"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    artifact = _build_artifact(tmp_path, ext_dir)
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    engine_settings = settings.model_copy(
+        update={"artifact_dir": tmp_path, "current_link": tmp_path / "current.duckdb"}
+    )
+    engine_settings.current_link.symlink_to(artifact)
+    engine_settings.duckdb_extension_dir = ext_dir
+    engine = SearchEngine(engine_settings, _FakeEmbedding())  # type: ignore[arg-type]
+
+    real_rrf = retrieval_module.weighted_rrf
+
+    def _inject_missing(
+        rankings: dict[str, list[str]], weights: dict[str, float], k: int
+    ) -> dict[str, float]:
+        fused = real_rrf(rankings, weights, k)
+        fused["missing-ghost-id"] = 999.0
+        return fused
+
+    monkeypatch.setattr(retrieval_module, "weighted_rrf", _inject_missing)
+    response = asyncio.run(engine.search("hiring", mode="hybrid", limit=10))
+
+    assert all(hit.document_id != "missing-ghost-id" for hit in response.results)
+    assert len(response.partial_warnings) == 1
+    assert "missing-ghost-id" in response.partial_warnings[0]
 
 
 def test_hybrid_context_still_resolves_valid_root(
@@ -112,3 +148,7 @@ def test_hybrid_context_still_resolves_valid_root(
     ids = {hit.document_id for hit in response.results}
     assert "msg-root-valid" in ids
     assert "dangling-root-id" not in ids
+    # The valid root must come through the contextual arm, not just
+    # lexical/semantic retrieval.
+    valid_hit = next(hit for hit in response.results if hit.document_id == "msg-root-valid")
+    assert valid_hit.contextual_rank is not None
