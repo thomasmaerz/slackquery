@@ -46,7 +46,14 @@ class Settings(BaseSettings):
         default="nomic-embed-text:v1.5",
         validation_alias=AliasChoices("EMBEDDING_MODEL", "SLACKQUERY_EMBEDDING_MODEL"),
     )
+    embedding_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "EMBEDDING_API_KEY", "SLACKQUERY_EMBEDDING_API_KEY"
+        ),
+    )
     embedding_model_revision: str | None = None
+    embedding_code_revision: str | None = None
     embedding_dim: int = Field(
         default=512,
         validation_alias=AliasChoices("EMBEDDING_DIM", "SLACKQUERY_EMBEDDING_DIM"),
@@ -108,4 +115,9 @@ class Settings(BaseSettings):
     @property
     def generation_id(self) -> str:
         revision = (self.embedding_model_revision or "unpinned").replace("/", "-")
-        return f"{self.embedding_model}@{revision}:d{self.embedding_dim}:recipe-v1"
+        code = self.embedding_code_revision
+        code_identity = f":code-{code.replace('/', '-')}" if code else ""
+        return (
+            f"{self.embedding_model}@{revision}{code_identity}:"
+            f"d{self.embedding_dim}:recipe-v1"
+        )

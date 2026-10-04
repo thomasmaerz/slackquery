@@ -16,7 +16,7 @@
 &nbsp;
 <img src="https://cdn.simpleicons.org/duckdb/F5F5F5" alt="DuckDB" height="42" />
 &nbsp;
-<img src="https://cdn.simpleicons.org/dagster/654FF0" alt="Dagster" height="42" />
+<img src="https://dagster.io/site-icons/icon-512.png" alt="Dagster" height="42" />
 
 </div>
 
@@ -124,9 +124,16 @@ Both transports use the same `/api/embed` request shape. Switching transport is
 safe only when the model weights, native dimensions, prefixes, 512-dimensional
 truncation, and L2 normalization are identical.
 
+Slackquery includes an optional authenticated PyTorch server for CUDA hosts. See
+the [PyTorch embedding server guide](docs/pytorch-embedding-server.md) for GPU
+installation, same-host and remote layouts, API-key setup, firewall requirements,
+and OpenAI-compatible usage. It is sandbox software and must not be exposed to the
+public internet.
+
 ```dotenv
 EMBEDDING_BACKEND=pytorch
 PYTORCH_EMBEDDING_BASE_URL=http://embedding-host:11435
+EMBEDDING_API_KEY=replace-with-the-server-key
 OLLAMA_EMBEDDING_BASE_URL=http://ollama-host:11434
 EMBEDDING_MODEL=nomic-embed-text:v1.5
 ```
@@ -172,6 +179,7 @@ not probabilities.
 
 - [Architecture and design plan](PLAN.md)
 - [Operations runbook](docs/operations.md)
+- [PyTorch embedding server](docs/pytorch-embedding-server.md)
 - [MCP client setup](docs/clients/README.md)
 - [Representative benchmarks](docs/benchmarks.md)
 - [Agent usage skill](SKILL.md)
