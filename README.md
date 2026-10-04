@@ -12,11 +12,15 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<img src="https://skillicons.dev/icons?i=python,docker,linux" alt="Python, Docker, and Linux" height="44" />
+<a href="https://www.python.org/"><img src="https://skillicons.dev/icons?i=python" alt="Python" height="44" /></a>
 &nbsp;
-<img src="https://cdn.simpleicons.org/duckdb/F5F5F5" alt="DuckDB" height="42" />
+<a href="https://www.docker.com/"><img src="https://skillicons.dev/icons?i=docker" alt="Docker" height="44" /></a>
 &nbsp;
-<img src="https://dagster.io/site-icons/icon-512.png" alt="Dagster" height="42" />
+<a href="https://www.kernel.org/"><img src="https://skillicons.dev/icons?i=linux" alt="Linux" height="44" /></a>
+&nbsp;
+<a href="https://duckdb.org/"><img src="https://cdn.simpleicons.org/duckdb/F5F5F5" alt="DuckDB" height="42" /></a>
+&nbsp;
+<a href="https://dagster.io/"><img src="https://dagster.io/site-icons/icon-512.png" alt="Dagster" height="42" /></a>
 
 </div>
 
