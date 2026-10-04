@@ -382,7 +382,7 @@ class EmbeddingWorker:
         remaining = max_items
         try:
             while remaining is None or remaining > 0:
-                size = self.settings.embedding_batch_size
+                size = self.settings.effective_embedding_batch_size
                 if remaining is not None:
                     size = min(size, remaining)
                 batch = self._claim(connection, size)

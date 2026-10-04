@@ -1,9 +1,10 @@
 # Benchmarks
 
-These reference measurements use a representative **46k-document corpus** of
-active message documents and exact cosine scan over normalized 512-dimensional
-vectors. They are not hardware guarantees; reproduce them in your environment
-before setting service-level objectives.
+These reference measurements predate thread-context and attachment-chunk
+projection and use a representative **46k-message corpus** with exact cosine scan
+over normalized 512-dimensional vectors. They are not current Gold deployment
+numbers or hardware guarantees; reproduce them in your environment before
+setting service-level objectives.
 
 ## Embedding throughput
 
@@ -15,6 +16,10 @@ document inputs after warmup:
 | 1 | 36.3 ms | 27.6 docs/s |
 | 32 | 155.6 ms | 205.7 docs/s |
 | 128 | 602.6 ms | 212.4 docs/s |
+
+Those larger synthetic batches are not a safe production default for every GPU.
+Use `SLACKQUERY_PYTORCH_EMBEDDING_BATCH_SIZE` to cap CUDA requests independently
+and validate sustained operation on the target device.
 
 The corpus had approximately 46k successful content-addressed vectors. Switching
 transport between compatible Ollama and PyTorch servers did not invalidate them
@@ -37,7 +42,7 @@ DuckDB version, and document length can materially change results.
 
 ## Artifact build
 
-Building and indexing the representative 46k-document immutable DuckDB artifact
+Building and indexing the representative message-only immutable DuckDB artifact
 took 6.75 seconds. Checksum validation and a fresh read-only open completed before
 publication.
 

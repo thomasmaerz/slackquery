@@ -17,6 +17,7 @@ def settings(tmp_path: Path) -> Settings:
         state_db=tmp_path / "state.duckdb",
         artifact_dir=artifacts,
         current_link=artifacts / "current.duckdb",
+        attachment_root=tmp_path / "attachments",
         duckdb_extension_dir=tmp_path / "extensions",
         embedding_backend="ollama",
         embedding_batch_size=2,

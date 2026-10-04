@@ -16,7 +16,7 @@ class SearchFilters(BaseModel):
     author_ids: list[str] = Field(default_factory=list)
     start_ts_us: int | None = None
     end_ts_us: int | None = None
-    document_kinds: list[str] = Field(default_factory=lambda: ["message"])
+    document_kinds: list[str] = Field(default_factory=lambda: ["message", "file_chunk"])
 
     @model_validator(mode="after")
     def valid_range(self) -> SearchFilters:
@@ -49,6 +49,8 @@ class SearchHit(BaseModel):
     lexical_score: float | None = None
     semantic_rank: int | None = None
     semantic_score: float | None = None
+    contextual_rank: int | None = None
+    exact_boost: float = 0.0
     fused_score: float
 
 
@@ -56,6 +58,12 @@ class SearchResponse(BaseModel):
     query: str
     mode: SearchMode
     artifact_id: str
+    build_id: str | None = None
+    generation_id: str | None = None
+    route: Literal["exact", "conceptual", "mixed"] = "mixed"
+    effective_weights: dict[str, float] = Field(default_factory=dict)
+    partial_warnings: list[str] = Field(default_factory=list)
+    timings_ms: dict[str, float] = Field(default_factory=dict)
     results: list[SearchHit]
     next_cursor: str | None = None
 
@@ -92,6 +100,9 @@ class ProjectionStats(BaseModel):
     active: int
     tombstoned: int
     watermark: str
+    projected_by_kind: dict[str, int] = Field(default_factory=dict)
+    active_by_kind: dict[str, int] = Field(default_factory=dict)
+    extraction: dict[str, int] = Field(default_factory=dict)
 
 
 class EmbedStats(BaseModel):

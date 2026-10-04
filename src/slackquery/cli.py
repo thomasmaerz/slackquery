@@ -12,7 +12,16 @@ from pathlib import Path
 
 import uvicorn
 
-from slackquery.artifact import build_artifact, publish_artifact, validate_artifact
+from slackquery.artifact import (
+    backup_state,
+    build_artifact,
+    gold_validate,
+    publish_artifact,
+    restore_state,
+    retain_artifacts,
+    rollback_artifact,
+    validate_artifact,
+)
 from slackquery.embedding import EmbeddingWorker, LocalEmbeddingClient
 from slackquery.projection import project_documents
 from slackquery.retrieval import SearchEngine
@@ -45,6 +54,15 @@ def parser() -> argparse.ArgumentParser:
     benchmark = commands.add_parser("benchmark", help="benchmark lexical queries")
     benchmark.add_argument("queries", type=Path, help="one query per line")
     benchmark.add_argument("--iterations", type=int, default=1)
+    commands.add_parser("retain", help="apply artifact retention policy")
+    rollback = commands.add_parser("rollback", help="atomically publish a prior build")
+    rollback.add_argument("build_id_or_path")
+    backup = commands.add_parser("backup", help="checkpoint and back up state DB")
+    backup.add_argument("destination", type=Path)
+    restore = commands.add_parser("restore", help="validate and restore state DB backup")
+    restore.add_argument("backup", type=Path)
+    gold = commands.add_parser("gold-validate", help="run automated Gold invariants")
+    gold.add_argument("artifact", type=Path, nargs="?")
     return result
 
 
@@ -90,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings()
     try:
         if args.command == "project":
-            _print(project_documents(settings.canonical_db, settings.state_db))
+            _print(project_documents(settings.canonical_db, settings.state_db, settings))
         elif args.command == "embed":
             _print(asyncio.run(_embed(settings, args.max_items)))
         elif args.command == "embedding-status":
@@ -101,12 +119,27 @@ def main(argv: list[str] | None = None) -> int:
             _print({"current": str(publish_artifact(settings, args.artifact))})
         elif args.command == "validate":
             _print(validate_artifact(args.artifact, verify_checksum=args.checksum))
+        elif args.command == "retain":
+            _print(retain_artifacts(settings))
+        elif args.command == "rollback":
+            _print({"current": str(rollback_artifact(settings, args.build_id_or_path))})
+        elif args.command == "backup":
+            _print(backup_state(settings, args.destination))
+        elif args.command == "restore":
+            _print(restore_state(settings, args.backup))
+        elif args.command == "gold-validate":
+            report = gold_validate(settings, args.artifact)
+            _print(report)
+            if not report["valid"]:
+                return 1
         elif args.command == "benchmark":
             _print(asyncio.run(_benchmark(settings, args.queries, args.iterations)))
         elif args.command == "run":
             uvicorn.run(
-                create_asgi_app(settings), host=args.host or settings.host,
-                port=args.port or settings.port, log_level=settings.log_level.lower(),
+                create_asgi_app(settings),
+                host=args.host or settings.host,
+                port=args.port or settings.port,
+                log_level=settings.log_level.lower(),
             )
         return 0
     except (OSError, RuntimeError, ValueError) as error:

@@ -21,7 +21,7 @@ def test_filters_are_parameterized() -> None:
         SearchFilters(workspace_ids=["W1' OR true --"], channel_ids=["C1"]), 10
     )
     assert "W1" not in sql
-    assert params == ["W1' OR true --", "C1", "message"]
+    assert params == ["W1' OR true --", "C1", "message", "file_chunk"]
 
 
 def test_filter_hard_cap() -> None:
@@ -38,7 +38,10 @@ def test_bad_cursor_rejected() -> None:
 async def test_mcp_contract_names(settings: Settings) -> None:
     tools = await create_mcp(settings).list_tools()
     assert {tool.name for tool in tools} == {
-        "search_slack", "get_slack_message", "get_slack_thread", "list_slack_scopes"
+        "search_slack",
+        "get_slack_message",
+        "get_slack_thread",
+        "list_slack_scopes",
     }
 
 

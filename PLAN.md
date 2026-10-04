@@ -64,9 +64,11 @@ generation metadata.
 
 ### Search documents
 
-The projection creates one primary search document per active message. A document
-contains stable source identity, workspace/channel/author metadata, timestamps,
-thread relationships, resolved text, and a deterministic source version.
+The projection creates one primary search document per active message, one
+bounded context document per thread, and deterministic chunks for safely
+extractable attachments. Documents contain stable source identity,
+workspace/channel/author metadata, timestamps, thread relationships, resolved
+text, source revision, and a versioned embedding recipe.
 
 Projection requirements:
 
@@ -97,7 +99,8 @@ assume a digest.
 Each artifact contains:
 
 - projected active documents;
-- one validated vector per document for the selected generation;
+- one validated vector per message and file chunk for the selected generation;
+- thread-context documents used as contextual candidates without duplicate vectors;
 - DuckDB FTS indexes;
 - build metadata, source watermark, schema version, and checksums.
 
@@ -185,27 +188,27 @@ Measured reference results are documented in [docs/benchmarks.md](docs/benchmark
 
 ## Delivery roadmap
 
-### Implemented
+### Implemented automated Gold scope
 
-- deterministic message projection and tombstones;
+- deterministic message, thread-context, and attachment-chunk projection;
+- attachment traversal and symlink-escape rejection;
 - resumable content-addressed embedding worker;
 - PyTorch-compatible and Ollama transport switch;
-- immutable artifact build, checksum validation, publication, and retention;
-- lexical, semantic, and hybrid retrieval;
+- immutable artifact build, checksum validation, publication, retention, and rollback;
+- lexical, semantic, and route-aware hybrid retrieval with weighted RRF;
 - MCP server, bearer authentication, health probes, CLI, and Dagster assets;
+- Prometheus metrics, state backup/restore, and blocking Gold checks;
 - unit, integration, security, and deployment-contract tests.
 
 ### Near term
 
 - publish a small synthetic fixture and end-to-end tutorial;
-- add human-judged relevance evaluation and regression thresholds;
-- add structured metrics for queue depth, batch throughput, and query branches;
+- add human-judged relevance evaluation and regression thresholds if relevance
+  claims become necessary;
 - test reverse-proxy and authentication recipes in CI.
 
 ### Later
 
-- optional file/chunk documents with distinct text recipes;
-- richer thread-level representations evaluated alongside atomic messages;
 - approximate vector indexes for archives where exact scan is insufficient;
 - multi-generation migration tooling and artifact promotion workflows.
 

@@ -37,6 +37,11 @@ SLACKQUERY_STATE_DB=/srv/slackquery/state/slackquery.duckdb
 SLACKQUERY_ARTIFACT_DIR=/srv/slackquery/artifacts
 SLACKQUERY_CURRENT_LINK=/srv/slackquery/artifacts/current.duckdb
 SLACKQUERY_DUCKDB_EXTENSION_DIR=/srv/slackquery/extensions
+SLACKQUERY_ATTACHMENT_ROOT=/path/to/slackdump
+# Optional JSON values. Roots are checked only as root/workspace/local_object_path;
+# Slackquery never recursively searches an attachment tree.
+SLACKQUERY_ATTACHMENT_SEARCH_ROOTS=[]
+SLACKQUERY_ATTACHMENT_WORKSPACE_MAP={}
 EMBEDDING_BACKEND=pytorch
 PYTORCH_EMBEDDING_BASE_URL=http://embedding-host:11435
 OLLAMA_EMBEDDING_BASE_URL=http://ollama-host:11434
@@ -46,7 +51,15 @@ EMBEDDING_DIM=512
 EMBEDDING_API_KEY=replace-with-the-server-key
 SLACKQUERY_EMBEDDING_MODEL_REVISION=40-character-model-commit
 SLACKQUERY_EMBEDDING_CODE_REVISION=40-character-code-commit
+SLACKQUERY_EMBEDDING_BATCH_SIZE=32
+SLACKQUERY_PYTORCH_EMBEDDING_BATCH_SIZE=1
 ```
+
+`SLACKQUERY_ATTACHMENT_WORKSPACE_MAP` maps canonical workspace IDs to exact
+directory names when neither `workspace_id`, `workspace_slug`, nor `team_name`
+matches the on-disk directory. Attachment paths must remain relative, resolve
+inside the selected workspace directory, and point to regular files; symlink
+escapes are rejected.
 
 ### Pinning the model
 
@@ -172,6 +185,30 @@ Run `slackquery embedding-status` after every switch. Reuse existing vectors onl
 when model revision, native dimension, prefixes, truncation, normalization, and
 text recipe are identical. A different generation must be re-embedded and
 published as a new artifact.
+
+Do not switch a running backfill merely because the selected endpoint returns an
+error. Stop the worker, diagnose that endpoint, and obtain operator approval
+before changing `EMBEDDING_BACKEND`. Separate endpoints can still contend for
+the same GPU.
+
+### PyTorch HTTP 500 on low-memory GPUs
+
+A CUDA endpoint can pass `/health` and model verification but return HTTP 500
+after a CUDA kernel fault. Inspect the server journal rather than assuming every
+500 is ordinary memory pressure. Errors such as `CUDA error: an illegal
+instruction was encountered` poison the process's CUDA context: every later
+request, including a one-item probe, fails until the PyTorch service restarts.
+Confirm recovery with a one-item request before resuming. Check the alternative
+transport's process endpoint too, and unload any model accidentally loaded there
+before retrying.
+
+`SLACKQUERY_PYTORCH_EMBEDDING_BATCH_SIZE` caps only CUDA request batches; the
+general worker limit remains `SLACKQUERY_EMBEDDING_BATCH_SIZE`. Start
+conservatively (for example, `1` on a 2 GiB GPU) and increase only after a
+sustained test. An interrupted worker's leased rows become reclaimable after
+`SLACKQUERY_LEASE_SECONDS`. If an unauthorized backend wrote state, stop every
+one-off worker, restore the pre-migration backup, rerun `project`, and resume
+with the intended backend. Preserve successful existing vectors.
 
 ## Routine reconciliation
 
