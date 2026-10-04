@@ -1,0 +1,22 @@
+services:
+  slackquery:
+    image: ${SLACKQUERY_IMAGE:-slackquery:local}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SLACKQUERY_CANONICAL_DB: /srv/slackquery/data/slackpipe.duckdb
+      SLACKQUERY_STATE_DB: /srv/slackquery/state/slackquery.duckdb
+      SLACKQUERY_ARTIFACT_DIR: /srv/slackquery/artifacts
+      SLACKQUERY_CURRENT_LINK: /srv/slackquery/artifacts/current.duckdb
+      SLACKQUERY_DUCKDB_EXTENSION_DIR: /srv/slackquery/extensions
+    ports: ["${SLACKQUERY_BIND_ADDRESS:-127.0.0.1}:${SLACKQUERY_MCP_PORT:-8181}:8080"]
+    volumes:
+      - ${SLACKQUERY_CANONICAL_DB_HOST:-/path/to/slackpipe.duckdb}:/srv/slackquery/data/slackpipe.duckdb:ro
+      - ${SLACKQUERY_STATE_DIR_HOST:-/srv/slackquery/state}:/srv/slackquery/state
+      - ${SLACKQUERY_ARTIFACT_DIR_HOST:-/srv/slackquery/artifacts}:/srv/slackquery/artifacts
+      - ${SLACKQUERY_EXTENSION_DIR_HOST:-/srv/slackquery/extensions}:/srv/slackquery/extensions
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]

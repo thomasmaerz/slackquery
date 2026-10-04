@@ -1,0 +1,57 @@
+[project]
+name = "slackquery"
+version = "0.1.0"
+description = "Immutable hybrid Slack archive search and MCP service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "dagster==1.13.20",
+  "dagster-postgres==0.29.20",
+  "sqlalchemy>=2.0,<2.1",
+  "duckdb>=1.5,<1.6",
+  "httpx>=0.27,<1",
+  "mcp>=1.26,<2",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "starlette>=0.40,<1",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.25,<2",
+  "respx>=0.22,<1",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+slackquery = "slackquery.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/slackquery"]
+force-include = { "sql" = "slackquery/sql" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".agents"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["slackquery"]
+warn_unreachable = true
