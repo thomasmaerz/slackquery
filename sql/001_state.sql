@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS document_projection (
     projected_at TIMESTAMPTZ NOT NULL
 );
 
+ALTER TABLE document_projection ADD COLUMN IF NOT EXISTS source_identity VARCHAR;
+ALTER TABLE document_projection ADD COLUMN IF NOT EXISTS source_revision VARCHAR;
+ALTER TABLE document_projection ADD COLUMN IF NOT EXISTS embedding_recipe VARCHAR;
+UPDATE document_projection
+SET source_identity = coalesce(source_identity, source_version),
+    source_revision = coalesce(source_revision, source_version),
+    embedding_recipe = coalesce(
+        embedding_recipe,
+        CASE WHEN document_kind = 'message' THEN 'message-v1' ELSE document_kind || '-v1' END
+    );
+
 CREATE TABLE IF NOT EXISTS embedding_generations (
     generation_id VARCHAR PRIMARY KEY,
     endpoint_class VARCHAR NOT NULL,
@@ -82,6 +93,15 @@ CREATE TABLE IF NOT EXISTS projection_watermarks (
     active_count BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS projection_reports (
+    source_identity VARCHAR PRIMARY KEY,
+    source_watermark VARCHAR NOT NULL,
+    projected_at TIMESTAMPTZ NOT NULL,
+    projected_by_kind_json JSON NOT NULL,
+    active_by_kind_json JSON NOT NULL,
+    extraction_json JSON NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS search_builds (
     build_id VARCHAR PRIMARY KEY,
     source_watermark VARCHAR NOT NULL,
@@ -100,4 +120,4 @@ CREATE TABLE IF NOT EXISTS search_builds (
     error_message VARCHAR
 );
 
-INSERT INTO schema_metadata(schema_version) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO schema_metadata(schema_version) VALUES (3) ON CONFLICT DO NOTHING;

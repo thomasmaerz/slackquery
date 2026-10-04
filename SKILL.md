@@ -11,9 +11,11 @@ description: Search archived multi-workspace Slack messages and threads through 
 - `get_slack_thread`: expand one promising result chronologically.
 
 Use the narrowest known workspace, channel, author, and time filters before
-increasing limits. Use lexical mode for exact IDs, errors, filenames, URLs, code,
-and quoted phrases. Use semantic mode for paraphrased how/why questions. Scores
-rank candidates; they are not probabilities. Expand only promising threads.
+increasing limits. Hybrid mode routes exact, conceptual, and mixed queries and
+can return message or file-chunk evidence while using thread-context candidates
+for ranking. Use lexical mode for exact IDs, errors, filenames, URLs, code, and
+quoted phrases. Use semantic mode for paraphrased how/why questions. Scores rank
+candidates; they are not probabilities. Expand only promising threads.
 
 Cite workspace, channel, author, timestamp, and `document_id`; include the
 permalink when available. Cursors are opaque and bound to one artifact, query,

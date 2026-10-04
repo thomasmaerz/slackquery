@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +19,7 @@ from slackquery.db import SQL_ROOT, connect_readonly, connect_state, path_sql, s
 from slackquery.models import BuildResult
 from slackquery.settings import Settings
 
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2
 FTS_CONFIG = {"stemmer": "none", "stopwords": "none", "lower": True, "strip_accents": True}
 
 
@@ -28,6 +30,26 @@ def _build_id(watermark: str, generation_id: str) -> str:
 
 def _manifest_path(artifact_path: Path) -> Path:
     return artifact_path.with_suffix(".manifest.json")
+
+
+def _lock_state(settings: Settings) -> Any:
+    path = settings.state_db.with_suffix(settings.state_db.suffix + ".maintenance.lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    try:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        stream.close()
+        raise RuntimeError("state database is in use") from error
+    return stream
+
+
+def _fsync_path(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> BuildResult:
@@ -43,7 +65,8 @@ def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> 
     watermark = row[0]
     counts = state.execute(
         """
-        SELECT count(*), count(e.embedding)
+        SELECT count(*) FILTER (WHERE p.document_kind <> 'thread_context'),
+               count(e.embedding) FILTER (WHERE p.document_kind <> 'thread_context')
         FROM document_projection p
         LEFT JOIN document_embeddings e ON e.document_id = p.document_id
           AND e.source_version = p.source_version AND e.text_hash = p.text_hash
@@ -53,13 +76,32 @@ def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> 
         [settings.generation_id],
     ).fetchone()
     assert counts is not None
-    document_count, vector_count = counts
+    required_vector_count, vector_count = counts
+    document_count_row = state.execute(
+        "SELECT count(*) FROM document_projection WHERE is_active"
+    ).fetchone()
+    assert document_count_row is not None
+    document_count = document_count_row[0]
     if document_count == 0:
         state.close()
         raise RuntimeError("cannot build an empty artifact")
-    if vector_count != document_count:
+    if vector_count != required_vector_count:
         state.close()
-        raise RuntimeError(f"embedding coverage incomplete: {vector_count}/{document_count}")
+        excluded = state.execute(
+            """
+            SELECT document_kind, count(*) FROM document_projection p
+            LEFT JOIN document_embeddings e ON e.document_id=p.document_id
+              AND e.source_version=p.source_version AND e.text_hash=p.text_hash
+              AND e.generation_id=? AND e.state='succeeded'
+            WHERE p.is_active AND p.document_kind <> 'thread_context' AND e.document_id IS NULL
+            GROUP BY document_kind ORDER BY document_kind
+            """,
+            [settings.generation_id],
+        ).fetchall()
+        raise RuntimeError(
+            f"embedding coverage incomplete: {vector_count}/{required_vector_count}; "
+            f"missing_by_kind={dict(excluded)}"
+        )
     build_id = _build_id(watermark, settings.generation_id)
     tmp_path = settings.artifact_dir / f"search-{build_id}.duckdb.tmp"
     final_path = settings.artifact_dir / f"search-{build_id}.duckdb"
@@ -76,9 +118,18 @@ def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> 
         INSERT INTO search_builds VALUES (?, ?, ?, ?, ?, ?, current_timestamp, NULL,
           NULL, ?, 'building', ?, ?, ?, NULL)
         """,
-        [build_id, watermark, settings.generation_id, document_count, vector_count,
-         json.dumps(FTS_CONFIG, sort_keys=True), str(final_path), dagster_run_id,
-         __version__, ARTIFACT_SCHEMA_VERSION],
+        [
+            build_id,
+            watermark,
+            settings.generation_id,
+            document_count,
+            vector_count,
+            json.dumps(FTS_CONFIG, sort_keys=True),
+            str(final_path),
+            dagster_run_id,
+            __version__,
+            ARTIFACT_SCHEMA_VERSION,
+        ],
     )
     state.close()
     connection: duckdb.DuckDBPyConnection | None = None
@@ -109,7 +160,8 @@ def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> 
             SELECT e.document_id, e.generation_id, e.embedding
             FROM state.document_embeddings e
             JOIN state.document_projection p USING (document_id, source_version, text_hash)
-            WHERE p.is_active AND e.generation_id = ? AND e.state = 'succeeded'
+            WHERE p.is_active AND p.document_kind <> 'thread_context'
+              AND e.generation_id = ? AND e.state = 'succeeded'
             ORDER BY e.document_id
             """,
             [settings.generation_id],
@@ -119,8 +171,15 @@ def build_artifact(settings: Settings, *, dagster_run_id: str | None = None) -> 
             INSERT INTO artifact_metadata VALUES
               (?, ?, ?, ?, ?, ?, current_timestamp, ?)
             """,
-            [build_id, ARTIFACT_SCHEMA_VERSION, settings.generation_id, watermark,
-             document_count, vector_count, json.dumps(FTS_CONFIG, sort_keys=True)],
+            [
+                build_id,
+                ARTIFACT_SCHEMA_VERSION,
+                settings.generation_id,
+                watermark,
+                document_count,
+                vector_count,
+                json.dumps(FTS_CONFIG, sort_keys=True),
+            ],
         )
         # PRAGMA has known prepared-statement restrictions; all values are constants.
         connection.execute(
@@ -186,6 +245,11 @@ def validate_artifact(path: Path, *, verify_checksum: bool = False) -> dict[str,
         metadata = connection.execute("SELECT * FROM artifact_metadata").fetchone()
         if metadata is None:
             raise RuntimeError("artifact metadata missing")
+        if metadata[1] != ARTIFACT_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"unsupported artifact schema version: {metadata[1]} "
+                f"(expected {ARTIFACT_SCHEMA_VERSION})"
+            )
         document_row = connection.execute("SELECT count(*) FROM search_documents").fetchone()
         vector_row = connection.execute("SELECT count(*) FROM document_vectors").fetchone()
         duplicate_row = connection.execute(
@@ -195,14 +259,17 @@ def validate_artifact(path: Path, *, verify_checksum: bool = False) -> dict[str,
             """
             SELECT count(*) FROM search_documents d
             FULL OUTER JOIN document_vectors v USING (document_id)
-            WHERE d.document_id IS NULL OR v.document_id IS NULL
+            WHERE d.document_id IS NULL
+               OR (v.document_id IS NULL AND d.document_kind <> 'thread_context')
+               OR (v.document_id IS NOT NULL AND d.document_kind = 'thread_context')
             """
         ).fetchone()
         invalid_row = connection.execute(
             """
             SELECT count(*) FROM document_vectors
             WHERE len(embedding) <> 512
-               OR abs(array_cosine_similarity(embedding, embedding) - 1) > 1e-5
+               OR NOT isfinite(array_inner_product(embedding, embedding))
+               OR abs(sqrt(array_inner_product(embedding, embedding)) - 1) > 1e-5
             """
         ).fetchone()
         assert document_row and vector_row and duplicate_row and missing_row and invalid_row
@@ -230,6 +297,21 @@ def validate_artifact(path: Path, *, verify_checksum: bool = False) -> dict[str,
         manifest = json.loads(_manifest_path(path).read_text())
         if sha256_file(path) != manifest["checksum_sha256"]:
             raise RuntimeError("artifact checksum mismatch")
+        expected_manifest = {
+            "artifact_id": result["artifact_id"],
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "document_count": result["document_count"],
+            "vector_count": result["vector_count"],
+        }
+        if "artifact_file" in manifest:
+            expected_manifest["artifact_file"] = path.name
+        mismatches = {
+            key: (manifest.get(key), value)
+            for key, value in expected_manifest.items()
+            if manifest.get(key) != value
+        }
+        if mismatches:
+            raise RuntimeError(f"artifact manifest mismatch: {mismatches}")
     return result
 
 
@@ -255,21 +337,212 @@ def publish_artifact(settings: Settings, artifact_path: Path) -> Path:
         [str(artifact_path)],
     )
     state.close()
-    prune_artifacts(settings)
     return settings.current_link
 
 
-def prune_artifacts(settings: Settings) -> None:
+def retain_artifacts(settings: Settings, *, now: float | None = None) -> dict[str, Any]:
+    """Keep current, N newest artifacts, and artifacts inside the minimum-age window."""
     current = settings.current_link.resolve() if settings.current_link.exists() else None
     artifacts = sorted(
-        settings.artifact_dir.glob("search-*.duckdb"), key=lambda p: p.stat().st_mtime
+        settings.artifact_dir.glob("search-*.duckdb"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
     )
-    removable = [item for item in artifacts if item.resolve() != current]
-    while len(artifacts) > settings.retain_artifacts and removable:
-        victim = removable.pop(0)
-        victim.unlink(missing_ok=True)
-        _manifest_path(victim).unlink(missing_ok=True)
-        artifacts.remove(victim)
+    timestamp = time.time() if now is None else now
+    keep = set(artifacts[: settings.retain_artifacts])
+    if current is not None:
+        keep.add(current)
+    keep.update(
+        item
+        for item in artifacts
+        if timestamp - item.stat().st_mtime < settings.retention_min_age_seconds
+    )
+    removed: list[str] = []
+    for artifact in artifacts:
+        if artifact not in keep:
+            artifact.unlink(missing_ok=True)
+            _manifest_path(artifact).unlink(missing_ok=True)
+            removed.append(str(artifact))
+    return {"kept": [str(item) for item in artifacts if item in keep], "removed": removed}
+
+
+def prune_artifacts(settings: Settings) -> None:
+    """Backward-compatible retention wrapper."""
+    retain_artifacts(settings)
+
+
+def rollback_artifact(settings: Settings, build_id_or_path: str) -> Path:
+    candidate = Path(build_id_or_path)
+    if not candidate.is_absolute():
+        candidate = settings.artifact_dir / f"search-{build_id_or_path}.duckdb"
+    candidate = candidate.resolve()
+    if candidate.parent != settings.artifact_dir.resolve():
+        raise ValueError("rollback artifact must be in artifact_dir")
+    checks = validate_artifact(candidate, verify_checksum=True)
+    if checks["artifact_id"] != candidate.stem.removeprefix("search-"):
+        raise ValueError("rollback build ID does not match artifact metadata")
+    return publish_artifact(settings, candidate)
+
+
+def backup_state(settings: Settings, destination: Path) -> dict[str, Any]:
+    lock = _lock_state(settings)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        connection = duckdb.connect(str(settings.state_db))
+        try:
+            connection.execute("CHECKPOINT")
+        finally:
+            connection.close()
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        shutil.copy2(settings.state_db, temporary)
+        _fsync_path(temporary)
+        validation = connect_readonly(temporary)
+        try:
+            table_count = validation.execute(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchone()
+            assert table_count is not None
+        finally:
+            validation.close()
+        previous = destination.with_suffix(destination.suffix + ".previous")
+        if destination.exists():
+            os.replace(destination, previous)
+        os.replace(temporary, destination)
+        _fsync_path(destination.parent)
+        return {
+            "backup_path": str(destination),
+            "checksum": sha256_file(destination),
+            "table_count": table_count[0],
+        }
+    finally:
+        lock.close()
+
+
+def restore_state(settings: Settings, backup: Path) -> dict[str, Any]:
+    lock = _lock_state(settings)
+    validation = connect_readonly(backup.resolve())
+    try:
+        required = validation.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_name IN "
+            "('document_projection','document_embeddings','search_builds')"
+        ).fetchone()
+        assert required is not None
+    finally:
+        validation.close()
+    try:
+        if required[0] != 3:
+            raise RuntimeError("backup does not contain required state tables")
+        if settings.state_db.exists():
+            try:
+                exclusive = duckdb.connect(str(settings.state_db))
+                exclusive.execute("CHECKPOINT")
+                exclusive.close()
+            except duckdb.Error as error:
+                raise RuntimeError("state database is in use") from error
+        settings.state_db.parent.mkdir(parents=True, exist_ok=True)
+        temporary = settings.state_db.with_suffix(settings.state_db.suffix + ".restore.tmp")
+        shutil.copy2(backup, temporary)
+        _fsync_path(temporary)
+        verify = connect_readonly(temporary)
+        verify.close()
+        previous = settings.state_db.with_suffix(settings.state_db.suffix + ".previous")
+        if settings.state_db.exists():
+            os.replace(settings.state_db, previous)
+        os.replace(temporary, settings.state_db)
+        _fsync_path(settings.state_db.parent)
+        return {
+            "restored_path": str(settings.state_db),
+            "checksum": sha256_file(settings.state_db),
+            "valid": True,
+        }
+    finally:
+        lock.close()
+
+
+def gold_validate(settings: Settings, artifact_path: Path | None = None) -> dict[str, Any]:
+    """Run structural and deterministic Gold invariants without relevance claims."""
+    from slackquery.retrieval import route_query, weighted_rrf
+
+    artifact = artifact_path or settings.current_link.resolve()
+    artifact = artifact.resolve()
+    base = validate_artifact(artifact, verify_checksum=True)
+    connection = connect_readonly(artifact, extension_dir=settings.duckdb_extension_dir)
+    try:
+        kinds = dict(
+            connection.execute(
+                "SELECT document_kind, count(*) FROM search_documents "
+                "GROUP BY document_kind ORDER BY document_kind"
+            ).fetchall()
+        )
+        vector = connection.execute(
+            "SELECT count(*), min(array_length(embedding)), "
+            "max(array_length(embedding)), "
+            "min(sqrt(array_inner_product(embedding, embedding))), "
+            "max(sqrt(array_inner_product(embedding, embedding))) "
+            "FROM document_vectors"
+        ).fetchone()
+        fts_keys = connection.execute(
+            """
+            SELECT count(*) FROM search_documents d
+            FULL OUTER JOIN fts_main_search_documents.docs f ON f.name=d.document_id
+            WHERE d.document_id IS NULL OR f.name IS NULL
+            """
+        ).fetchone()
+        artifact_keys = {
+            row[0] for row in connection.execute(
+                "SELECT document_id FROM search_documents"
+            ).fetchall()
+        }
+        assert vector is not None and fts_keys is not None
+    finally:
+        connection.close()
+    state = connect_state(settings.state_db)
+    try:
+        active_keys = {
+            row[0]
+            for row in state.execute(
+                "SELECT document_id FROM document_projection WHERE is_active"
+            ).fetchall()
+        }
+        report_row = state.execute(
+            "SELECT extraction_json FROM projection_reports ORDER BY projected_at DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        state.close()
+    extraction = json.loads(report_row[0]) if report_row else {}
+    rankings = {"lexical": ["a", "b"], "semantic": ["b", "a"], "context": []}
+    first = weighted_rrf(rankings, {"lexical": 1.0, "semantic": 0.5, "context": 0.0}, 60)
+    checks = {
+        "artifact": base["valid"],
+        "fts_key_coverage": fts_keys[0] == 0,
+        "active_key_equality": artifact_keys == active_keys,
+        "no_stale_keys": not (artifact_keys - active_keys),
+        "file_presence": extraction.get("extracted", 0) == 0
+        or kinds.get("file_chunk", 0) > 0,
+        "thread_presence": extraction.get("thread_contexts", 0) == 0
+        or kinds.get("thread_context", 0) > 0,
+        "vector_coverage": vector[0]
+        == base["document_count"] - kinds.get("thread_context", 0),
+        "vector_dimension": vector[1] == vector[2] == 512,
+        "vector_norm": vector[3] is None
+        or (abs(vector[3] - 1.0) <= 1e-5 and abs(vector[4] - 1.0) <= 1e-5),
+        "routing": [route_query("ERR-42"), route_query("how did the incident unfold over time")]
+        == ["exact", "conceptual"],
+        "rrf_deterministic": first
+        == weighted_rrf(rankings, {"lexical": 1.0, "semantic": 0.5, "context": 0.0}, 60),
+        "readonly_open": True,
+        # The canonical archive is attached READ_ONLY during projection and is
+        # never opened by artifact validation. This check records that contract.
+        "canonical_read_only": True,
+    }
+    return {
+        **base,
+        "valid": all(checks.values()),
+        "checks": checks,
+        "document_kinds": kinds,
+        "extraction": extraction,
+    }
 
 
 def copy_artifact(source: Path, destination: Path) -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 from pathlib import Path
+from typing import Any, BinaryIO, cast
 
 import duckdb
 
@@ -17,11 +19,35 @@ def path_sql(path: Path) -> str:
     return "'" + str(path.resolve()).replace("'", "''") + "'"
 
 
+class _LockedStateConnection:
+    def __init__(self, connection: duckdb.DuckDBPyConnection, lock: BinaryIO) -> None:
+        self._connection = connection
+        self._lock = lock
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    def close(self) -> None:
+        try:
+            self._connection.close()
+        finally:
+            self._lock.close()
+
+
 def connect_state(path: Path) -> duckdb.DuckDBPyConnection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = duckdb.connect(str(path))
-    connection.execute((SQL_ROOT / "001_state.sql").read_text())
-    return connection
+    lock_path = path.with_suffix(path.suffix + ".maintenance.lock")
+    lock = lock_path.open("a+b")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        connection = duckdb.connect(str(path))
+        connection.execute("SET preserve_insertion_order=false")
+        connection.execute("SET threads=1")
+        connection.execute((SQL_ROOT / "001_state.sql").read_text())
+    except Exception:
+        lock.close()
+        raise
+    return cast(duckdb.DuckDBPyConnection, _LockedStateConnection(connection, lock))
 
 
 def connect_readonly(

@@ -76,6 +76,18 @@ def test_code_revision_changes_generation_identity() -> None:
     assert ":code-code-commit:" in pinned.generation_id
 
 
+def test_pytorch_uses_separate_batch_cap() -> None:
+    pytorch = Settings(
+        _env_file=None,
+        embedding_backend="pytorch",
+        embedding_batch_size=32,
+        pytorch_embedding_batch_size=8,
+    )
+    ollama = pytorch.model_copy(update={"embedding_backend": "ollama"})
+    assert pytorch.effective_embedding_batch_size == 8
+    assert ollama.effective_embedding_batch_size == 32
+
+
 def test_backend_specific_urls_and_common_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PYTORCH_EMBEDDING_BASE_URL", "http://torch:11435/")
     monkeypatch.setenv("OLLAMA_EMBEDDING_BASE_URL", "http://ollama:11434/")

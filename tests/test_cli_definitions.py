@@ -7,8 +7,19 @@ from slackquery.definitions import candidate_integrity, definitions
 def test_cli_commands_are_present() -> None:
     help_text = parser().format_help()
     for command in (
-        "project", "embed", "embedding-status", "build", "publish", "run", "validate",
+        "project",
+        "embed",
+        "embedding-status",
+        "build",
+        "publish",
+        "run",
+        "validate",
         "benchmark",
+        "retain",
+        "rollback",
+        "backup",
+        "restore",
+        "gold-validate",
     ):
         assert command in help_text
 

@@ -12,6 +12,10 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+[Documentation](https://github.com/thomasmaerz/slackquery/wiki) ·
+[Sister project: Slackpipe](https://github.com/thomasmaerz/slackpipe) ·
+[Slackpipe docs](https://github.com/thomasmaerz/slackpipe-docs)
+
 <a href="https://www.python.org/"><img src="https://skillicons.dev/icons?i=python" alt="Python" height="44" /></a>
 &nbsp;
 <a href="https://www.docker.com/"><img src="https://skillicons.dev/icons?i=docker" alt="Docker" height="44" /></a>
@@ -32,7 +36,10 @@ while keeping ingestion data read-only and deployment under your control.
 ## Why Slackquery
 
 - **Hybrid retrieval:** exact terms through DuckDB FTS, semantic matches through
-  local embeddings, and deterministic RRF for the default ranking.
+  local embeddings, query-aware routing, weighted RRF, exact-term boosts, and
+  deterministic thread/channel diversity.
+- **Context-rich documents:** messages, bounded thread contexts, and safely
+  extracted text, code, CSV, PDF, DOCX, and PPTX attachment chunks.
 - **Immutable serving:** build and validate a new artifact before atomically
   publishing it; readers never share the mutable pipeline database.
 - **Local model support:** switch between a batched PyTorch-compatible server and
@@ -43,12 +50,15 @@ while keeping ingestion data read-only and deployment under your control.
   scope discovery, health probes, and optional bearer authentication.
 - **Dagster-native operations:** assets, checks, and a reconciliation schedule are
   included without coupling the MCP process to the writer.
+- **Operational controls:** Prometheus metrics, blocking Gold validation,
+  retention, rollback, and state backup/restore commands.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     C[(Canonical Slack DuckDB<br/>read-only)]
+    F[(Attachment tree<br/>read-only)]
     P[Deterministic projection]
     S[(Pipeline state<br/>documents + vectors)]
     E{Embedding backend}
@@ -60,6 +70,7 @@ flowchart LR
     U[Agents and clients]
 
     C --> P --> S
+    F --> P
     S --> E
     E --> PT
     E --> OL
@@ -85,8 +96,8 @@ process opens only the selected artifact.
 ### Local installation
 
 ```bash
-git clone https://github.com/OWNER/REPOSITORY.git
-cd REPOSITORY
+git clone https://github.com/thomasmaerz/slackquery.git
+cd slackquery
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
@@ -107,7 +118,7 @@ slackquery run
 ```
 
 Connect an MCP client to `http://mcp-host:8181/mcp`. Liveness and readiness are
-available at `/healthz` and `/readyz`.
+available at `/healthz` and `/readyz`; Prometheus metrics are at `/metrics`.
 
 ### Docker Compose
 
@@ -177,7 +188,8 @@ not probabilities.
 |---|---|
 | **Stable** | Projection, resumable embeddings, immutable builds, validation, atomic publication, lexical search, exact semantic search, hybrid RRF, MCP tools, health probes. |
 | **Beta** | Dagster integration, remote multi-client operation, PyTorch-compatible transport, operational benchmarks. |
-| **Planned** | Human-judged relevance suites, optional approximate vector indexes at larger scale, file/chunk retrieval, richer observability. |
+| **Automated Gold** | Message/thread/file projection, route-aware weighted RRF, exact boosts, diversity, structural validation, recovery controls, and Prometheus observability. |
+| **Not claimed** | Human-judged relevance quality. Exact vector scan remains the default until measured SLO evidence justifies an approximate index. |
 
 ## Documentation
 

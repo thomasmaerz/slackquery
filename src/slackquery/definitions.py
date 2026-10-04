@@ -4,7 +4,13 @@ from pathlib import Path
 
 import dagster as dg
 
-from slackquery.artifact import build_artifact, publish_artifact, validate_artifact
+from slackquery.artifact import (
+    build_artifact,
+    gold_validate,
+    publish_artifact,
+    retain_artifacts,
+    validate_artifact,
+)
 from slackquery.db import connect_state
 from slackquery.embedding import run_worker
 from slackquery.projection import project_documents
@@ -37,7 +43,8 @@ def document_projection(
     context: dg.AssetExecutionContext, slackquery: SlackqueryResource
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
     del context
-    stats = project_documents(slackquery.settings().canonical_db, slackquery.settings().state_db)
+    settings = slackquery.settings()
+    stats = project_documents(settings.canonical_db, settings.state_db, settings)
     return dg.MaterializeResult(metadata=stats.model_dump())
 
 
@@ -69,8 +76,21 @@ def published_artifact(
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
     settings = slackquery.settings()
     artifact = _candidate_for_run(settings, context.run_id)
+    checks = gold_validate(settings, artifact)
+    if not checks["valid"]:
+        raise RuntimeError(f"Gold validation failed: {checks['checks']}")
     current = publish_artifact(settings, artifact)
-    return dg.MaterializeResult(metadata={"current": dg.MetadataValue.path(current)})
+    retention = retain_artifacts(settings)
+    return dg.MaterializeResult(
+        metadata={
+            "current": dg.MetadataValue.path(current),
+            "build_id": checks["artifact_id"],
+            "document_count": checks["document_count"],
+            "vector_count": checks["vector_count"],
+            "document_kinds": dg.MetadataValue.json(checks["document_kinds"]),
+            "retention": dg.MetadataValue.json(retention),
+        }
+    )
 
 
 def _candidate_for_run(settings: Settings, run_id: str) -> Path:
@@ -101,6 +121,16 @@ def candidate_integrity(
     return dg.AssetCheckResult(passed=checks["valid"], metadata=checks)
 
 
+@dg.asset_check(asset=artifact_candidate, blocking=True)
+def gold_readiness(
+    context: dg.AssetCheckExecutionContext, slackquery: SlackqueryResource
+) -> dg.AssetCheckResult:
+    settings = slackquery.settings()
+    artifact = _candidate_for_run(settings, context.run.run_id)
+    report = gold_validate(settings, artifact)
+    return dg.AssetCheckResult(passed=report["valid"], metadata=report)
+
+
 reconcile_job = dg.define_asset_job(
     "slackquery_reconcile",
     selection=dg.AssetSelection.assets(
@@ -117,7 +147,7 @@ reconcile_schedule = dg.ScheduleDefinition(
 
 definitions = dg.Definitions(
     assets=[document_projection, message_embeddings, artifact_candidate, published_artifact],
-    asset_checks=[candidate_integrity],
+    asset_checks=[candidate_integrity, gold_readiness],
     jobs=[reconcile_job],
     schedules=[reconcile_schedule],
     resources={"slackquery": SlackqueryResource()},
