@@ -1,0 +1,22 @@
+[Unit]
+Description=Slackquery MCP service
+After=network-online.target
+
+[Service]
+Type=simple
+User=slackquery
+Group=slackquery
+WorkingDirectory=/srv/slackquery/app
+EnvironmentFile=/etc/slackquery/slackquery.env
+ExecStart=/srv/slackquery/app/.venv/bin/slackquery run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/path/to/slackpipe.duckdb
+ReadWritePaths=/srv/slackquery/artifacts /srv/slackquery/state
+
+[Install]
+WantedBy=multi-user.target

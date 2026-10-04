@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "skills": {
+    "attach-db": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/attach-db/SKILL.md",
+      "computedHash": "db6a105a312536b75a58616dfd38b46909253c88fcb1ffd58bfc506ffa3065d6"
+    },
+    "convert-file": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/convert-file/SKILL.md",
+      "computedHash": "d90e76d081b43aaa3fc0092a25cd81edc35fdb3f1aa4a051cf7e077f167531fd"
+    },
+    "duckdb-docs": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/duckdb-docs/SKILL.md",
+      "computedHash": "6aa9b9d013487eace5398a0e035cf5ee3efd220b34349a46e7c335cf079f7e66"
+    },
+    "install-duckdb": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/install-duckdb/SKILL.md",
+      "computedHash": "ce264b48e369a23adbda39804fc65c7e9fdffe182f6dfbc9f4e2fdf88b027b9e"
+    },
+    "motherduck-build-cfa-app": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-build-cfa-app/SKILL.md",
+      "computedHash": "81ded975cd41a62e3b0b83500ba6e7d7c9c37881b61419267d0e93365e1c7329"
+    },
+    "motherduck-build-dashboard": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-build-dashboard/SKILL.md",
+      "computedHash": "58f7a2bd0e18ddfdc15b69e33838994787d76685ed902ad74f9c84d773c8cb37"
+    },
+    "motherduck-build-data-pipeline": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-build-data-pipeline/SKILL.md",
+      "computedHash": "fe4606b52d8a4ce29b40723162065453f1014cd96d9fcdc8ff1bfacf72ee8b56"
+    },
+    "motherduck-cli": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-cli/SKILL.md",
+      "computedHash": "8603cda75a58ef628d01d8476098ab546cbde26f552c085bcde0a9f55650dde3"
+    },
+    "motherduck-connect": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-connect/SKILL.md",
+      "computedHash": "3ab57d4ebbd8dc950325f5bd929cfa12c6955c7ca4ad94de8c647da3dedeb175"
+    },
+    "motherduck-create-dive": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-create-dive/SKILL.md",
+      "computedHash": "e672ac626147ba87534fbaa55a57226ac487f77c539e951a1545121f443fc0e5"
+    },
+    "motherduck-create-flight": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-create-flight/SKILL.md",
+      "computedHash": "0851de2cb6e91f32b0400f88cc15e6bbd901d9e04ec290e584c154737452a915"
+    },
+    "motherduck-design-dive": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-design-dive/SKILL.md",
+      "computedHash": "d4ac88e201ad6f6e5ba48df166bb627f9e7d0659f7cb329bc08964cbfdbd60f7"
+    },
+    "motherduck-duckdb-sql": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-duckdb-sql/SKILL.md",
+      "computedHash": "749e6161803b45e01bae55665102ed09751874c607128d432388185bcafd2611"
+    },
+    "motherduck-ducklake": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-ducklake/SKILL.md",
+      "computedHash": "2f3496cfbe7e91829d7c1282921994ad41c9f13050f384a910faa3ea0554aa8c"
+    },
+    "motherduck-enable-self-serve-analytics": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-enable-self-serve-analytics/SKILL.md",
+      "computedHash": "5692080b264469dbe2377a4f112cdac155a0ec0efb8a10ba920eea09eb885091"
+    },
+    "motherduck-explore": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-explore/SKILL.md",
+      "computedHash": "5e3d1a8930c7df31d0c7d89404ec4e9ffaea3c490c9beca90c347407b6dd0cea"
+    },
+    "motherduck-load-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-load-data/SKILL.md",
+      "computedHash": "479b08d45145b9f64f9f722617717678ceb140401f6b80b60055589d05342b37"
+    },
+    "motherduck-manage-guides": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-manage-guides/SKILL.md",
+      "computedHash": "cafd0674f7036771d70568b1769553a70f8865b18388be63f10883e9eb7a3795"
+    },
+    "motherduck-migrate-to-motherduck": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-migrate-to-motherduck/SKILL.md",
+      "computedHash": "59df24e9f406922594b07bb3eb3c0d3ca41faadf8e793c4067133b4ad40e53ab"
+    },
+    "motherduck-model-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-model-data/SKILL.md",
+      "computedHash": "cb2412a783710b25003a8aea0f12b684c4b26fd5a76685dc5e52841d47b4daff"
+    },
+    "motherduck-partner-delivery": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-partner-delivery/SKILL.md",
+      "computedHash": "ca5a920a3f138dad312c32c5b3659f039c45f6ceb05681e60d6a9dd989a566eb"
+    },
+    "motherduck-pricing-roi": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-pricing-roi/SKILL.md",
+      "computedHash": "a25b3b680932df1bc7863fa0647d3e2f81010bf1a2ce522800801149cf001fa7"
+    },
+    "motherduck-query": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-query/SKILL.md",
+      "computedHash": "86fcc5bebf9413679b22c1a9a4141ac2e39a686184e760f5d69eee162cc93ff6"
+    },
+    "motherduck-rest-api": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-rest-api/SKILL.md",
+      "computedHash": "0a94f2af6d8ee7c56d413b1837cf94fb8e1188565dbbbb75deb738176ab4128e"
+    },
+    "motherduck-security-governance": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-security-governance/SKILL.md",
+      "computedHash": "735e06da1198540a87022cd3b1472a7380c5f5c172135a49afce4aaaa7139282"
+    },
+    "motherduck-share-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/motherduck-share-data/SKILL.md",
+      "computedHash": "a7b0fa20295e369b1b47ddea829cb288b832d30761a2854ac8b8306576b5b90b"
+    },
+    "query": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/query/SKILL.md",
+      "computedHash": "4ef826c2a588b8629aef536a797ea67f31f8f5a04f88acadbc5ba84f6778887d"
+    },
+    "read-file": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/read-file/SKILL.md",
+      "computedHash": "16607eb0d4dc7e2ff8d92e2bdba6bedb67aedb1189f66249a46ed672ca1782c4"
+    },
+    "read-memories": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/read-memories/SKILL.md",
+      "computedHash": "8dc541c486e39a748d97f92b6ef77843a00cec5edc15e87a33d3c7f3c92c8843"
+    },
+    "s3-explore": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/s3-explore/SKILL.md",
+      "computedHash": "0ef01aca1506330cd54080f9aa594968f13132bdf818f707683d7fa1b92c1523"
+    },
+    "spatial": {
+      "source": "duckdb/duckdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/spatial/SKILL.md",
+      "computedHash": "9ca6811793c8c29d9bdb3a2a6de52ba382c791ab57ae452d0ecea35f6c3930c1"
+    }
+  }
+}
