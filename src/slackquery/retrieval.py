@@ -256,10 +256,10 @@ class SearchEngine:
                 )
                 fts_query = _sql_literal(_fts_query(query))
                 rows = connection.execute(
-                    f"""SELECT coalesce(root.document_id, d.thread_root_id),
+                    f"""SELECT root.document_id,
                     fts_main_search_documents.match_bm25(d.document_id, {fts_query}) score
                     FROM search_documents d
-                    LEFT JOIN search_documents root
+                    JOIN search_documents root
                       ON root.document_id=d.thread_root_id AND root.document_kind='message'
                     WHERE score IS NOT NULL {context_sql}
                     ORDER BY score DESC, d.document_id LIMIT ?""",
@@ -289,6 +289,17 @@ class SearchEngine:
                     sorted(document_ids),
                 ).fetchall()
             data = {row[0]: row[1:] for row in data_rows}
+            # Defense in depth: fused IDs may reference rows absent from the
+            # artifact (e.g. legacy dangling thread_root_id). Drop them with a
+            # deterministic warning instead of raising KeyError.
+            missing_ids = sorted(document_ids - data.keys())
+            partial_warnings: list[str] = []
+            if missing_ids:
+                sample = ", ".join(missing_ids[:5])
+                partial_warnings.append(
+                    f"dropped {len(missing_ids)} fused id(s) missing from artifact: {sample}"
+                )
+                document_ids = set(data.keys())
             boosts = {
                 item: _exact_boost(
                     query,
@@ -374,7 +385,7 @@ class SearchEngine:
                 effective_weights={
                     key: value for key, value in weights.items() if mode == "hybrid" or key == mode
                 },
-                partial_warnings=[],
+                partial_warnings=partial_warnings,
                 timings_ms={
                     "retrieval": round((time.perf_counter() - retrieval_started) * 1000, 3)
                 },
