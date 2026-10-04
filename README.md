@@ -14,7 +14,7 @@
 
 [Documentation](https://github.com/thomasmaerz/slackquery/wiki) ·
 [Sister project: Slackpipe](https://github.com/thomasmaerz/slackpipe) ·
-[Slackpipe docs](https://github.com/thomasmaerz/slackpipe-docs)
+[Slackpipe wiki](https://github.com/thomasmaerz/slackpipe/wiki)
 
 <a href="https://www.python.org/"><img src="https://skillicons.dev/icons?i=python" alt="Python" height="44" /></a>
 &nbsp;
