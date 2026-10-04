@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+embedding-server = [
+  "einops>=0.8,<1",
+  "sentence-transformers>=6.1,<7",
+  "torch>=2.4,<2.5",
+  "transformers>=5.3,<5.4",
+]
 dev = [
   "mypy>=1.14,<2",
   "pytest>=8.3,<10",
@@ -28,6 +34,7 @@ dev = [
 
 [project.scripts]
 slackquery = "slackquery.cli:main"
+slackquery-embedding = "slackquery.embedding_server:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

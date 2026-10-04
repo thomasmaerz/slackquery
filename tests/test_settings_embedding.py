@@ -4,6 +4,7 @@ import math
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from slackquery.embedding import (
     BatchEmbeddingValidationError,
@@ -36,6 +37,14 @@ def test_exact_embedding_env_names_take_precedence(monkeypatch: pytest.MonkeyPat
     assert settings.embedding_dim == 512
 
 
+def test_embedding_api_key_loads_as_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMBEDDING_API_KEY", "test-embedding-api-key")
+    settings = Settings(_env_file=None)
+    assert settings.embedding_api_key is not None
+    assert settings.embedding_api_key.get_secret_value() == "test-embedding-api-key"
+    assert "test-embedding-api-key" not in repr(settings.embedding_api_key)
+
+
 def test_default_runtime_paths_urls_and_optional_digest() -> None:
     settings = Settings(_env_file=None)
     assert str(settings.state_db).startswith("/srv/slackquery/")
@@ -58,6 +67,13 @@ def test_backend_flag_switches_url_without_changing_generation(
     assert pytorch.embedding_base_url == "http://localhost:11435"
     assert ollama.embedding_base_url == "http://localhost:11434"
     assert pytorch.generation_id == ollama.generation_id
+
+
+def test_code_revision_changes_generation_identity() -> None:
+    baseline = Settings(_env_file=None)
+    pinned = Settings(_env_file=None, embedding_code_revision="code-commit")
+    assert baseline.generation_id != pinned.generation_id
+    assert ":code-code-commit:" in pinned.generation_id
 
 
 def test_backend_specific_urls_and_common_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,6 +178,7 @@ async def test_pytorch_verifies_health_cuda_tags_digest_and_dimension(settings: 
                     "ollama_name": settings.embedding_model,
                     "device": "cuda",
                     "native_dimension": 768,
+                    "code_revision": settings.embedding_code_revision,
                 },
             )
         if request.url.path == "/api/tags":
@@ -171,7 +188,10 @@ async def test_pytorch_verifies_health_cuda_tags_digest_and_dimension(settings: 
                     "models": [{
                         "name": settings.embedding_model,
                         "digest": settings.embedding_model_revision,
-                        "details": {"embedding_length": 768},
+                        "details": {
+                            "embedding_length": 768,
+                            "code_revision": settings.embedding_code_revision,
+                        },
                     }]
                 },
             )
@@ -188,6 +208,45 @@ async def test_pytorch_verifies_health_cuda_tags_digest_and_dimension(settings: 
     assert status["device"] == "cuda"
     assert status["native_dimension"] == 768
     assert status["generation_id"] == settings.generation_id
+
+
+@pytest.mark.asyncio
+async def test_pytorch_sends_api_key_without_leaking_it_from_status(settings: Settings) -> None:
+    secret = "test-embedding-api-key"
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr(secret),
+            "embedding_verify_model": False,
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == f"Bearer {secret}"
+        return httpx.Response(200, json={"embeddings": [[1.0] * 768]})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        client = LocalEmbeddingClient(settings, http)
+        await client.embed(["one"])
+        assert secret not in repr(client.status())
+
+
+@pytest.mark.asyncio
+async def test_ollama_does_not_receive_pytorch_api_key(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={"embedding_api_key": SecretStr("test-embedding-api-key")}
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json={"embeddings": [[1.0] * 768]})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://ollama"
+    ) as http:
+        await LocalEmbeddingClient(settings, http).embed(["one"])
 
 
 @pytest.mark.asyncio

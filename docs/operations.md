@@ -42,15 +42,23 @@ PYTORCH_EMBEDDING_BASE_URL=http://embedding-host:11435
 OLLAMA_EMBEDDING_BASE_URL=http://ollama-host:11434
 EMBEDDING_MODEL=nomic-embed-text:v1.5
 EMBEDDING_DIM=512
+# Required when using the bundled authenticated PyTorch server.
+EMBEDDING_API_KEY=replace-with-the-server-key
+SLACKQUERY_EMBEDDING_MODEL_REVISION=40-character-model-commit
+SLACKQUERY_EMBEDDING_CODE_REVISION=40-character-code-commit
 ```
 
 ### Pinning the model
 
-Public defaults do not contain a model digest. Inspect `/api/tags` on the
-selected embedding server, confirm the model and native dimension, then set:
+Public defaults do not contain a model digest. Ollama reports its content digest.
+The bundled PyTorch server instead requires reviewed Hugging Face commits for
+both the model repository and its remote-code repository. Confirm the server
+metadata and native dimension, then set the applicable values:
 
 ```dotenv
 SLACKQUERY_EMBEDDING_MODEL_REVISION=sha256-digest-from-your-server
+# PyTorch only:
+SLACKQUERY_EMBEDDING_CODE_REVISION=40-character-code-commit
 ```
 
 With a pin, `slackquery embedding-status` fails if the server silently replaces
@@ -190,9 +198,15 @@ Expected properties:
 
 ```bash
 slackquery embedding-status
-curl -fsS http://embedding-host:11435/health
-curl -fsS http://embedding-host:11435/api/tags
+curl -fsS -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+  http://embedding-host:11435/health
+curl -fsS -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+  http://embedding-host:11435/api/tags
 ```
+
+The bundled PyTorch service is an unaudited sandbox component. Keep it behind a
+host firewall on a trusted network even when API-key authentication is enabled.
+See the [dedicated deployment guide](pytorch-embedding-server.md).
 
 Common failures:
 

@@ -105,7 +105,7 @@ class LocalEmbeddingClient:
 
     async def _get(self, path: str, purpose: str) -> httpx.Response:
         try:
-            response = await self.client.get(path)
+            response = await self.client.get(path, headers=self._authentication_headers())
         except httpx.TransportError as error:
             raise EmbeddingRequestError(type(error).__name__, retryable=True) from error
         if response.status_code >= 400:
@@ -116,6 +116,12 @@ class LocalEmbeddingClient:
             )
         return response
 
+    def _authentication_headers(self) -> dict[str, str]:
+        key = self.settings.embedding_api_key
+        if self.settings.embedding_backend != "pytorch" or key is None:
+            return {}
+        return {"Authorization": f"Bearer {key.get_secret_value()}"}
+
     async def _verify_pytorch_health(self) -> None:
         response = await self._get("/health", "checking health")
         try:
@@ -124,6 +130,7 @@ class LocalEmbeddingClient:
             model = str(health.get("ollama_name", health["model"]))
             device = str(health["device"])
             native_dimension = int(health["native_dimension"])
+            code_revision = health.get("code_revision")
         except (KeyError, TypeError, ValueError) as error:
             raise EmbeddingValidationError("invalid PyTorch /health response") from error
         if status.lower() not in {"ok", "healthy"}:
@@ -138,6 +145,12 @@ class LocalEmbeddingClient:
         if native_dimension != 768:
             raise EmbeddingValidationError(
                 f"PyTorch native dimension must be 768, got {native_dimension}"
+            )
+        expected_code_revision = self.settings.embedding_code_revision
+        if expected_code_revision is not None and code_revision != expected_code_revision:
+            raise EmbeddingValidationError(
+                "PyTorch code revision mismatch: expected "
+                f"{expected_code_revision}, got {code_revision}"
             )
         self.health_status = status
         self.device = device
@@ -155,6 +168,7 @@ class LocalEmbeddingClient:
             )
             digest = model["digest"]
             native_dimension = model["details"]["embedding_length"]
+            code_revision = model["details"].get("code_revision")
         except (ValueError, KeyError, TypeError, StopIteration) as error:
             raise EmbeddingValidationError(
                 f"model {self.settings.embedding_model!r} is absent from /api/tags"
@@ -174,6 +188,12 @@ class LocalEmbeddingClient:
                 "PyTorch /health and /api/tags native dimensions disagree: "
                 f"{self.native_dimension} != {native_dimension}"
             )
+        expected_code_revision = self.settings.embedding_code_revision
+        if expected_code_revision is not None and code_revision != expected_code_revision:
+            raise EmbeddingValidationError(
+                "model code revision mismatch: expected "
+                f"{expected_code_revision}, got {code_revision}"
+            )
         self.native_dimension = native_dimension
 
     def status(self) -> dict[str, object]:
@@ -183,6 +203,7 @@ class LocalEmbeddingClient:
             "base_url": self.settings.embedding_base_url,
             "model": self.settings.embedding_model,
             "model_revision": self.settings.embedding_model_revision,
+            "code_revision": self.settings.embedding_code_revision,
             "native_dimension": self.native_dimension,
             "stored_dimension": self.settings.embedding_dim,
             "device": self.device,
@@ -203,7 +224,9 @@ class LocalEmbeddingClient:
             "keep_alive": self.settings.embedding_keep_alive,
         }
         try:
-            response = await self.client.post("/api/embed", json=payload)
+            response = await self.client.post(
+                "/api/embed", json=payload, headers=self._authentication_headers()
+            )
         except httpx.TransportError as error:
             raise EmbeddingRequestError(type(error).__name__, retryable=True) from error
         if response.status_code >= 400:
@@ -267,7 +290,8 @@ class EmbeddingWorker:
     def _ensure_generation(self, connection: duckdb.DuckDBPyConnection) -> None:
         model_revision = self.settings.embedding_model_revision or "unpinned"
         config_hash = hashlib.sha256(
-            f"{self.settings.embedding_model}|{model_revision}|512|v1".encode()
+            f"{self.settings.embedding_model}|{model_revision}|"
+            f"{self.settings.embedding_code_revision or 'none'}|512|v1".encode()
         ).hexdigest()
         connection.execute(
             """
