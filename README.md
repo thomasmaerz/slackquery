@@ -48,8 +48,8 @@ while keeping ingestion data read-only and deployment under your control.
   durable checkpoints make embedding work incremental and idempotent.
 - **Read-only MCP tools:** bounded search, exact message lookup, thread expansion,
   scope discovery, health probes, and optional bearer authentication.
-- **Dagster-native operations:** assets, checks, and a reconciliation schedule are
-  included without coupling the MCP process to the writer.
+- **Dagster-native operations:** assets, checks, and event-driven reconciliation
+  sensors are included without coupling the MCP process to the writer.
 - **Operational controls:** Prometheus metrics, blocking Gold validation,
   retention, rollback, and state backup/restore commands.
 

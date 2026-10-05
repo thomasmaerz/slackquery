@@ -161,11 +161,24 @@ The package exports `slackquery.definitions:definitions`, containing:
 3. `search/artifact_candidate`
 4. blocking candidate integrity checks
 5. `search/published_artifact`
+6. the `slackquery_reconcile` asset job (tagged `lane: slackquery`)
+7. the `reconcile_on_ingestion` run-status sensor
+8. the `reconcile_stuck_reaper` sensor
 
-The included hourly schedule runs the asset job. In another Dagster deployment,
-load the module as a code location and inject local paths/endpoints through its
-environment. Keep only one writer active for a given state database and artifact
-directory.
+Reconciliation is event-driven, not scheduled. `reconcile_on_ingestion`
+launches the job after a successful ingestion run (initial, incremental, or
+full canonical sweep) and skips when a reconcile is already queued or
+running, so runs never pile up. `reconcile_stuck_reaper` terminates runs
+that emit no events for 90 minutes; embedding progress checkpoints per
+batch, so the next run resumes safely.
+
+Every asset logs start/finish lines and the embedding worker logs per-batch
+progress, mirrored to both the run event log and the captured stdout tab.
+Sensor evaluations log their decisions to the tick log.
+
+In another Dagster deployment, load the module as a code location and inject
+local paths/endpoints through its environment. Keep only one writer active
+for a given state database and artifact directory.
 
 ## Backend switching
 
