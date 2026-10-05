@@ -497,7 +497,7 @@ def gold_validate(settings: Settings, artifact_path: Path | None = None) -> dict
         assert vector is not None and fts_keys is not None
     finally:
         connection.close()
-    state = connect_state(settings.state_db)
+    state = connect_readonly(settings.state_db)
     try:
         active_keys = {
             row[0]

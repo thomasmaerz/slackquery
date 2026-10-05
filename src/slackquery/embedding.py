@@ -7,6 +7,7 @@ import hashlib
 import math
 import random
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -375,8 +376,19 @@ class EmbeddingWorker:
         connection.execute("COMMIT")
         return claimed
 
-    async def run(self, max_items: int | None = None) -> EmbedStats:
+    async def run(
+        self,
+        max_items: int | None = None,
+        *,
+        status: Callable[[str], None] | None = None,
+    ) -> EmbedStats:
         await self.client.verify_model()
+        if status is not None:
+            status(
+                "embedding worker started "
+                f"(model={self.settings.embedding_model} "
+                f"batch_size={self.settings.effective_embedding_batch_size})"
+            )
         connection = connect_state(self.settings.state_db)
         claimed_count = succeeded = retryable_failed = terminal_failed = 0
         remaining = max_items
@@ -488,8 +500,22 @@ class EmbeddingWorker:
                         ],
                     )
                     succeeded += len(batch)
+                if status is not None:
+                    status(
+                        f"embedded batch of {len(batch)} "
+                        f"(claimed={claimed_count} succeeded={succeeded} "
+                        f"retryable_failed={retryable_failed} "
+                        f"terminal_failed={terminal_failed})"
+                    )
                 if remaining is not None:
                     remaining -= len(batch)
+            if status is not None:
+                status(
+                    "embedding worker finished "
+                    f"(claimed={claimed_count} succeeded={succeeded} "
+                    f"retryable_failed={retryable_failed} "
+                    f"terminal_failed={terminal_failed})"
+                )
             return EmbedStats(
                 claimed=claimed_count,
                 succeeded=succeeded,
@@ -508,12 +534,17 @@ async def embed_query(settings: Settings, query: str) -> list[float]:
         await client.close()
 
 
-def run_worker(settings: Settings, max_items: int | None = None) -> EmbedStats:
+def run_worker(
+    settings: Settings,
+    max_items: int | None = None,
+    *,
+    status: Callable[[str], None] | None = None,
+) -> EmbedStats:
     client = LocalEmbeddingClient(settings)
 
     async def execute() -> EmbedStats:
         try:
-            return await EmbeddingWorker(settings, client).run(max_items)
+            return await EmbeddingWorker(settings, client).run(max_items, status=status)
         finally:
             await client.close()
 
