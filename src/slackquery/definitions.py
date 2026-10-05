@@ -46,6 +46,12 @@ def event_timestamp_seconds(timestamp: float) -> float:
     return timestamp / 1000.0 if timestamp > 1e12 else timestamp
 
 
+def _emit(context: dg.AssetExecutionContext | dg.AssetCheckExecutionContext, message: str) -> None:
+    """Emit progress to both the event log and the captured stdout tab."""
+    context.log.info(message)
+    print(message, flush=True)
+
+
 class SlackqueryResource(dg.ConfigurableResource):  # type: ignore[type-arg]
     canonical_db: str | None = None
     state_db: str | None = None
@@ -72,9 +78,9 @@ def document_projection(
     context: dg.AssetExecutionContext, slackquery: SlackqueryResource
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
     settings = slackquery.settings()
-    context.log.info(f"projecting documents from {settings.canonical_db}")
+    _emit(context, f"projecting documents from {settings.canonical_db}")
     stats = project_documents(settings.canonical_db, settings.state_db, settings)
-    context.log.info(f"projection finished: {stats.model_dump()}")
+    _emit(context, f"projection finished: {stats.model_dump()}")
     return dg.MaterializeResult(metadata=stats.model_dump())
 
 
@@ -82,9 +88,9 @@ def document_projection(
 def message_embeddings(
     context: dg.AssetExecutionContext, slackquery: SlackqueryResource
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
-    context.log.info("embedding worker started")
-    stats = run_worker(slackquery.settings(), status=context.log.info)
-    context.log.info(f"embedding worker finished: {stats.model_dump()}")
+    _emit(context, "embedding worker started")
+    stats = run_worker(slackquery.settings(), status=lambda message: _emit(context, message))
+    _emit(context, f"embedding worker finished: {stats.model_dump()}")
     return dg.MaterializeResult(metadata=stats.model_dump())
 
 
@@ -92,9 +98,9 @@ def message_embeddings(
 def artifact_candidate(
     context: dg.AssetExecutionContext, slackquery: SlackqueryResource
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
-    context.log.info("building artifact candidate")
+    _emit(context, "building artifact candidate")
     result = build_artifact(slackquery.settings(), dagster_run_id=context.run_id)
-    context.log.info(f"artifact candidate built: {result.artifact_path}")
+    _emit(context, f"artifact candidate built: {result.artifact_path}")
     return dg.MaterializeResult(
         metadata={
             **result.model_dump(),
@@ -109,13 +115,13 @@ def published_artifact(
 ) -> dg.MaterializeResult:  # type: ignore[type-arg]
     settings = slackquery.settings()
     artifact = _candidate_for_run(settings, context.run_id)
-    context.log.info(f"validating gold readiness for {artifact}")
+    _emit(context, f"validating gold readiness for {artifact}")
     checks = gold_validate(settings, artifact)
     if not checks["valid"]:
         raise RuntimeError(f"Gold validation failed: {checks['checks']}")
     current = publish_artifact(settings, artifact)
     retention = retain_artifacts(settings)
-    context.log.info(f"published artifact, current={current}")
+    _emit(context, f"published artifact, current={current}")
     return dg.MaterializeResult(
         metadata={
             "current": dg.MetadataValue.path(current),
@@ -152,9 +158,9 @@ def candidate_integrity(
 ) -> dg.AssetCheckResult:
     settings = slackquery.settings()
     artifact = _candidate_for_run(settings, context.run.run_id)
-    context.log.info(f"checking candidate integrity for {artifact}")
+    _emit(context, f"checking candidate integrity for {artifact}")
     checks = validate_artifact(artifact, verify_checksum=True)
-    context.log.info(f"candidate integrity valid={checks['valid']}")
+    _emit(context, f"candidate integrity valid={checks['valid']}")
     return dg.AssetCheckResult(passed=checks["valid"], metadata=checks)
 
 
@@ -164,9 +170,9 @@ def gold_readiness(
 ) -> dg.AssetCheckResult:
     settings = slackquery.settings()
     artifact = _candidate_for_run(settings, context.run.run_id)
-    context.log.info(f"checking gold readiness for {artifact}")
+    _emit(context, f"checking gold readiness for {artifact}")
     report = gold_validate(settings, artifact)
-    context.log.info(f"gold readiness valid={report['valid']}")
+    _emit(context, f"gold readiness valid={report['valid']}")
     return dg.AssetCheckResult(passed=report["valid"], metadata=report)
 
 
@@ -196,6 +202,7 @@ def reconcile_on_ingestion(
     """
     run = context.dagster_run
     if not triggers_reconcile(run.job_name, run.tags):
+        context.log.info(f"ignoring successful {run.job_name}, no canonical data produced")
         return dg.SkipReason(f"job {run.job_name} does not produce canonical data")
     active = context.instance.get_runs(
         filters=dg.RunsFilter(
@@ -205,6 +212,10 @@ def reconcile_on_ingestion(
         limit=1,
     )
     if active:
+        context.log.info(
+            f"reconcile already active ({active[0].run_id[:8]}), skipping "
+            f"trigger from {run.run_id[:8]}"
+        )
         return dg.SkipReason(
             f"reconcile already active ({active[0].run_id[:8]}), skipping "
             f"trigger from {run.run_id[:8]}"
@@ -252,7 +263,9 @@ def reconcile_stuck_reaper(context: dg.SensorEvaluationContext) -> dg.SkipReason
             context.instance.report_run_canceling(run)
             stuck.append(run.run_id[:8])
     if stuck:
+        context.log.info(f"terminated silent runs: {', '.join(stuck)}")
         return dg.SkipReason(f"terminated silent runs: {', '.join(stuck)}")
+    context.log.info(f"checked {len(active)} active reconcile runs, none silent")
     return dg.SkipReason(
         f"no silent reconcile runs ({len(active)} active checked)"
     )
