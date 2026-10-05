@@ -1,5 +1,7 @@
 """Dagster assets and checks owned by the Slackquery code location."""
 
+import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import dagster as dg
@@ -15,6 +17,33 @@ from slackquery.db import connect_readonly
 from slackquery.embedding import run_worker
 from slackquery.projection import project_documents
 from slackquery.settings import Settings
+
+LANE_TAG = "lane"
+LANE = "slackquery"
+
+# Runs that completed ingestion and therefore may have produced fresh
+# canonical data. `all_workspaces_extract` is excluded: it only lands raw
+# archives, the canonical sweep (or a workspace incremental/initial flow)
+# follows it and triggers reconcile then.
+TRIGGER_MODES = frozenset({"initial", "incremental", "full"})
+TRIGGER_MODE_TAG = "slackpipe/mode"
+RAW_EXTRACT_JOB = "all_workspaces_extract"
+
+# A reconcile emitting no events for this long is hung, not slow: healthy
+# runs log at least every few seconds while draining the backlog.
+STUCK_SILENCE_SECONDS = 90 * 60
+
+
+def triggers_reconcile(job_name: str, tags: Mapping[str, str]) -> bool:
+    """Decide whether a successful run produced fresh canonical data."""
+    if job_name == RAW_EXTRACT_JOB:
+        return False
+    return tags.get(TRIGGER_MODE_TAG) in TRIGGER_MODES
+
+
+def event_timestamp_seconds(timestamp: float) -> float:
+    """Normalize an event timestamp that may be seconds or milliseconds."""
+    return timestamp / 1000.0 if timestamp > 1e12 else timestamp
 
 
 class SlackqueryResource(dg.ConfigurableResource):  # type: ignore[type-arg]
@@ -146,19 +175,93 @@ reconcile_job = dg.define_asset_job(
     selection=dg.AssetSelection.assets(
         document_projection, message_embeddings, artifact_candidate, published_artifact
     ),
+    tags={LANE_TAG: LANE},
 )
 
-reconcile_schedule = dg.ScheduleDefinition(
-    name="slackquery_hourly_reconciliation",
-    cron_schedule="0 * * * *",
-    target=reconcile_job,
+
+@dg.run_status_sensor(
+    run_status=dg.DagsterRunStatus.SUCCESS,
+    monitor_all_code_locations=True,
+    request_job=reconcile_job,
+    minimum_interval_seconds=60,
+    default_status=dg.DefaultSensorStatus.RUNNING,
 )
+def reconcile_on_ingestion(
+    context: dg.RunStatusSensorContext,
+) -> dg.SkipReason | dg.RunRequest:
+    """Reconcile search right after an ingestion run lands fresh data.
+
+    Replaces the old hourly schedule: reconcile only runs when canonical
+    data may actually have changed, and never overlaps itself.
+    """
+    run = context.dagster_run
+    if not triggers_reconcile(run.job_name, run.tags):
+        return dg.SkipReason(f"job {run.job_name} does not produce canonical data")
+    active = context.instance.get_runs(
+        filters=dg.RunsFilter(
+            job_name=reconcile_job.name,
+            statuses=[dg.DagsterRunStatus.QUEUED, dg.DagsterRunStatus.STARTED],
+        ),
+        limit=1,
+    )
+    if active:
+        return dg.SkipReason(
+            f"reconcile already active ({active[0].run_id[:8]}), skipping "
+            f"trigger from {run.run_id[:8]}"
+        )
+    context.log.info(f"triggering reconcile after successful {run.job_name}")
+    return dg.RunRequest(
+        run_key=f"ingestion-{run.run_id}",
+        tags={LANE_TAG: LANE},
+    )
+
+
+@dg.sensor(
+    minimum_interval_seconds=300,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def reconcile_stuck_reaper(context: dg.SensorEvaluationContext) -> dg.SkipReason:
+    """Terminate reconcile runs that stopped emitting events.
+
+    A hung run holds its concurrency-lane slot forever and blocks the
+    queue behind it; silence well past any legitimate quiet stretch
+    (startup, a slow batch) means it will never finish on its own.
+    Termination is safe: embedding progress checkpoints per batch in
+    DuckDB and the next run reclaims expired leases.
+    """
+    stuck: list[str] = []
+    now = time.time()
+    active = context.instance.get_runs(
+        filters=dg.RunsFilter(
+            job_name=reconcile_job.name,
+            statuses=[dg.DagsterRunStatus.STARTED],
+        )
+    )
+    for run in active:
+        records = context.instance.get_records_for_run(
+            run.run_id, limit=1, ascending=False
+        )
+        if not records.records:
+            continue
+        silence = now - event_timestamp_seconds(records.records[0].timestamp)
+        if silence > STUCK_SILENCE_SECONDS:
+            context.log.warning(
+                f"terminating silent reconcile run {run.run_id[:8]} "
+                f"(no events for {silence / 60:.0f}m)"
+            )
+            context.instance.report_run_canceling(run)
+            stuck.append(run.run_id[:8])
+    if stuck:
+        return dg.SkipReason(f"terminated silent runs: {', '.join(stuck)}")
+    return dg.SkipReason(
+        f"no silent reconcile runs ({len(active)} active checked)"
+    )
 
 
 definitions = dg.Definitions(
     assets=[document_projection, message_embeddings, artifact_candidate, published_artifact],
     asset_checks=[candidate_integrity, gold_readiness],
     jobs=[reconcile_job],
-    schedules=[reconcile_schedule],
+    sensors=[reconcile_on_ingestion, reconcile_stuck_reaper],
     resources={"slackquery": SlackqueryResource()},
 )

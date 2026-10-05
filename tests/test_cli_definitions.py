@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from slackquery.cli import main, parser
-from slackquery.definitions import candidate_integrity, definitions
+from slackquery.definitions import (
+    candidate_integrity,
+    definitions,
+    event_timestamp_seconds,
+    triggers_reconcile,
+)
 
 
 def test_cli_commands_are_present() -> None:
@@ -40,6 +45,28 @@ def test_dagster_asset_contract() -> None:
         "search/published_artifact",
     }
     assert next(iter(candidate_integrity.check_specs)).blocking is True
-    assert definitions.get_schedule_def("slackquery_hourly_reconciliation").name == (
-        "slackquery_hourly_reconciliation"
+    assert definitions.get_job_def("slackquery_reconcile").tags["lane"] == "slackquery"
+    assert (
+        definitions.get_sensor_def("reconcile_on_ingestion").name
+        == "reconcile_on_ingestion"
     )
+    assert (
+        definitions.get_sensor_def("reconcile_stuck_reaper").name
+        == "reconcile_stuck_reaper"
+    )
+
+
+def test_ingestion_trigger_predicate() -> None:
+    assert triggers_reconcile("leadership_incremental", {"slackpipe/mode": "incremental"})
+    assert triggers_reconcile("leadership_ingest_once", {"slackpipe/mode": "initial"})
+    assert triggers_reconcile("all_workspaces_canonical", {"slackpipe/mode": "full"})
+    assert not triggers_reconcile(
+        "all_workspaces_extract", {"slackpipe/mode": "incremental"}
+    )
+    assert not triggers_reconcile("yyjtech_attachments_once", {"slackpipe/mode": "attachments"})
+    assert not triggers_reconcile("slackquery_reconcile", {"lane": "slackquery"})
+
+
+def test_event_timestamp_normalization() -> None:
+    assert event_timestamp_seconds(1791162000.0) == 1791162000.0
+    assert event_timestamp_seconds(1791162000123.0) == 1791162000.123
