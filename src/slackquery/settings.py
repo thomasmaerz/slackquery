@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     pytorch_embedding_batch_size: int = Field(default=1, ge=1, le=256)
     embedding_max_chars: int = Field(default=64_000, ge=512, le=1_000_000)
     embedding_max_attempts: int = Field(default=5, ge=1, le=20)
+    embedding_busy_max_attempts: int = Field(default=8, ge=1, le=20)
+    embedding_busy_deadline_seconds: float = Field(default=30.0, ge=1, le=600)
+    embedding_busy_backoff_base_seconds: float = Field(default=0.25, gt=0, le=60)
+    embedding_busy_backoff_cap_seconds: float = Field(default=5.0, gt=0, le=120)
     lease_seconds: int = Field(default=900, ge=30, le=86_400)
     host: str = "0.0.0.0"
     port: int = Field(default=8080, ge=1, le=65535)
@@ -125,6 +129,11 @@ class Settings(BaseSettings):
             raise ValueError("candidate_window must be at least max_results")
         if self.file_chunk_overlap_tokens >= self.file_chunk_tokens:
             raise ValueError("file_chunk_overlap_tokens must be less than file_chunk_tokens")
+        if self.embedding_busy_backoff_cap_seconds < self.embedding_busy_backoff_base_seconds:
+            raise ValueError(
+                "embedding_busy_backoff_cap_seconds must be at least "
+                "embedding_busy_backoff_base_seconds"
+            )
         return self
 
     @property

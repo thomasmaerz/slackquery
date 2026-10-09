@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 
 import httpx
@@ -8,6 +9,7 @@ from pydantic import SecretStr
 
 from slackquery.embedding import (
     BatchEmbeddingValidationError,
+    EmbeddingRequestError,
     EmbeddingValidationError,
     LocalEmbeddingClient,
     OllamaClient,
@@ -86,6 +88,15 @@ def test_pytorch_uses_separate_batch_cap() -> None:
     ollama = pytorch.model_copy(update={"embedding_backend": "ollama"})
     assert pytorch.effective_embedding_batch_size == 8
     assert ollama.effective_embedding_batch_size == 32
+
+
+def test_busy_backoff_cap_must_cover_base() -> None:
+    with pytest.raises(ValueError, match="backoff_cap_seconds"):
+        Settings(
+            _env_file=None,
+            embedding_busy_backoff_base_seconds=2,
+            embedding_busy_backoff_cap_seconds=1,
+        )
 
 
 def test_backend_specific_urls_and_common_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -300,3 +311,381 @@ async def test_ollama_reports_per_item_validation(settings: Settings) -> None:
             await OllamaClient(settings, http).embed(["good", "bad"])
     assert isinstance(raised.value.outcomes[0], list)
     assert isinstance(raised.value.outcomes[1], EmbeddingValidationError)
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 100.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    async def sleep(self, delay: float) -> None:
+        self.value += delay
+
+
+def busy_response(
+    settings: Settings,
+    *,
+    retry_after: str = "2",
+    code: str = "MODEL_BUSY",
+    retryable: bool = True,
+    requested_model: str | None = None,
+) -> httpx.Response:
+    return httpx.Response(
+        503,
+        headers={"Retry-After": retry_after},
+        json={
+            "error": {
+                "code": code,
+                "retryable": retryable,
+                "requested_model": requested_model or settings.embedding_model,
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_authenticated_model_busy_retries_then_succeeds(settings: Settings) -> None:
+    secret = "test-embedding-api-key"
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr(secret),
+            "embedding_verify_model": False,
+            "embedding_busy_backoff_base_seconds": 0.25,
+            "embedding_busy_backoff_cap_seconds": 1.0,
+        }
+    )
+    clock = FakeClock()
+    delays: list[float] = []
+    requests: list[httpx.Request] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        await clock.sleep(delay)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) < 3:
+            return busy_response(settings)
+        return httpx.Response(200, json={"embeddings": [[1.0] * 768]})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        client = LocalEmbeddingClient(
+            settings,
+            http,
+            sleep=sleep,
+            monotonic=clock,
+            uniform=lambda _low, high: high,
+        )
+        result = await client.embed(["synthetic retry fixture"])
+
+    assert len(result[0]) == 512
+    assert delays == [2.0, 2.0]
+    assert len({request.content for request in requests}) == 1
+    assert all(request.headers["Authorization"] == f"Bearer {secret}" for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_model_busy_uses_capped_full_jitter(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+            "embedding_busy_backoff_base_seconds": 0.5,
+            "embedding_busy_backoff_cap_seconds": 1.0,
+        }
+    )
+    clock = FakeClock()
+    calls = 0
+    bounds: list[tuple[float, float]] = []
+    delays: list[float] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls < 4:
+            return busy_response(settings, retry_after="0")
+        return httpx.Response(200, json={"embeddings": [[1.0] * 768]})
+
+    def uniform(low: float, high: float) -> float:
+        bounds.append((low, high))
+        return high / 2
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        await clock.sleep(delay)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        await LocalEmbeddingClient(
+            settings, http, sleep=sleep, monotonic=clock, uniform=uniform
+        ).embed(["one"])
+
+    assert bounds == [(0.0, 0.5), (0.0, 1.0), (0.0, 1.0)]
+    assert delays == [0.25, 0.5, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_model_busy_attempt_limit_is_bounded_and_redacted(settings: Settings) -> None:
+    secret = "test-embedding-api-key"
+    input_text = "synthetic text must not appear in errors"
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr(secret),
+            "embedding_verify_model": False,
+            "embedding_busy_max_attempts": 3,
+        }
+    )
+    clock = FakeClock()
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return busy_response(settings, retry_after="0")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        with pytest.raises(EmbeddingRequestError) as raised:
+            await LocalEmbeddingClient(
+                settings, http, sleep=clock.sleep, monotonic=clock
+            ).embed([input_text])
+
+    assert calls == 3
+    assert raised.value.retries == 2
+    assert "after 2 retries: attempt limit reached" in str(raised.value)
+    assert settings.embedding_model in str(raised.value)
+    assert input_text not in str(raised.value)
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_model_busy_total_deadline_stops_before_sleep(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+            "embedding_busy_deadline_seconds": 1.0,
+        }
+    )
+    clock = FakeClock()
+    slept = False
+
+    async def sleep(_: float) -> None:
+        nonlocal slept
+        slept = True
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: busy_response(settings, retry_after="2")),
+        base_url="http://pytorch",
+    ) as http:
+        with pytest.raises(EmbeddingRequestError, match="retry deadline exceeded") as raised:
+            await LocalEmbeddingClient(
+                settings, http, sleep=sleep, monotonic=clock
+            ).embed(["one"])
+    assert raised.value.retries == 0
+    assert not slept
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_busy_sleep_propagates(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+        }
+    )
+    sleeping = asyncio.Event()
+
+    async def sleep(_: float) -> None:
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: busy_response(settings)),
+        base_url="http://pytorch",
+    ) as http:
+        task = asyncio.create_task(LocalEmbeddingClient(settings, http, sleep=sleep).embed(["one"]))
+        await sleeping.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_embedding_http_call_propagates(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+        }
+    )
+    requested = asyncio.Event()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        requested.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        task = asyncio.create_task(LocalEmbeddingClient(settings, http).embed(["one"]))
+        await requested.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "headers"),
+    [
+        (
+            503,
+            {
+                "error": {
+                    "code": "OTHER",
+                    "retryable": True,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+        (
+            503,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": False,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+        (
+            503,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": True,
+                    "requested_model": "wrong-model",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+        (
+            503,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": True,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {},
+        ),
+        (503, None, {"Retry-After": "1"}),
+        (
+            500,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": True,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+        (
+            429,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": True,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+        (
+            401,
+            {
+                "error": {
+                    "code": "MODEL_BUSY",
+                    "retryable": True,
+                    "requested_model": "nomic-embed-text:v1.5",
+                }
+            },
+            {"Retry-After": "1"},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_non_busy_errors_are_not_immediately_retried(
+    settings: Settings,
+    status: int,
+    body: dict[str, object] | None,
+    headers: dict[str, str],
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": "pytorch",
+            "embedding_api_key": SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+        }
+    )
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if body is None:
+            return httpx.Response(status, headers=headers, content=b"not-json")
+        return httpx.Response(status, headers=headers, json=body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://pytorch"
+    ) as http:
+        with pytest.raises(EmbeddingRequestError):
+            await LocalEmbeddingClient(settings, http).embed(["one"])
+    assert calls == 1
+
+
+@pytest.mark.parametrize("backend", ["pytorch", "ollama"])
+@pytest.mark.asyncio
+async def test_busy_retry_requires_authenticated_pytorch(
+    settings: Settings, backend: str
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "embedding_backend": backend,
+            "embedding_api_key": None
+            if backend == "pytorch"
+            else SecretStr("test-embedding-api-key"),
+            "embedding_verify_model": False,
+        }
+    )
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return busy_response(settings)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://embedding"
+    ) as http:
+        with pytest.raises(EmbeddingRequestError):
+            await LocalEmbeddingClient(settings, http).embed(["one"])
+    assert calls == 1

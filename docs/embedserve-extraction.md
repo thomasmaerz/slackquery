@@ -17,3 +17,8 @@ Nomic task prefixes, first-512-dimension Matryoshka truncation, and L2 normaliza
 The extraction deliberately did not remove, rewrite, or reformat the legacy server,
 its original tests, service unit, or guide. Their pre-extraction SHA-256 values are
 recorded in Embedserve's provenance and release evidence.
+
+SlackQuery retries only authenticated `503 MODEL_BUSY` embedding responses. Retries
+honor `Retry-After` as a minimum, add bounded exponential full jitter, preserve
+cancellation, and stop at both an attempt limit and total deadline. Other HTTP failures
+remain subject only to the existing durable worker retry policy.

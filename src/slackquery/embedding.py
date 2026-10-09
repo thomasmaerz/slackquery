@@ -6,8 +6,9 @@ import asyncio
 import hashlib
 import math
 import random
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -31,11 +32,17 @@ class EmbeddingRequestError(RuntimeError):
     """A classified embedding request failure."""
 
     def __init__(
-        self, message: str, *, retryable: bool, retry_after_seconds: float | None = None
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        retry_after_seconds: float | None = None,
+        retries: int = 0,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
+        self.retries = retries
 
 
 class BatchEmbeddingValidationError(EmbeddingValidationError):
@@ -79,9 +86,20 @@ def normalize_embedding(values: list[float], dimension: int = 512) -> list[float
 class LocalEmbeddingClient:
     """Strict adapter for compatible local `/api/embed` backends."""
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        uniform: Callable[[float, float], float] = random.uniform,
+    ) -> None:
         self.settings = settings
         self._owned = client is None
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._uniform = uniform
         self._model_verified = False
         self.native_dimension: int | None = None
         self.device: str | None = None
@@ -224,12 +242,7 @@ class LocalEmbeddingClient:
             "truncate": True,
             "keep_alive": self.settings.embedding_keep_alive,
         }
-        try:
-            response = await self.client.post(
-                "/api/embed", json=payload, headers=self._authentication_headers()
-            )
-        except httpx.TransportError as error:
-            raise EmbeddingRequestError(type(error).__name__, retryable=True) from error
+        response = await self._post_embedding(payload)
         if response.status_code >= 400:
             retryable = response.status_code == 429 or response.status_code >= 500
             raise EmbeddingRequestError(
@@ -266,6 +279,89 @@ class LocalEmbeddingClient:
         if any(isinstance(outcome, EmbeddingValidationError) for outcome in outcomes):
             raise BatchEmbeddingValidationError(outcomes)
         return [outcome for outcome in outcomes if isinstance(outcome, list)]
+
+    async def _post_embedding(self, payload: dict[str, object]) -> httpx.Response:
+        started = self._monotonic()
+        attempts = 0
+        retry_after: float | None = None
+        while True:
+            remaining = self.settings.embedding_busy_deadline_seconds - (
+                self._monotonic() - started
+            )
+            if remaining <= 0:
+                raise self._busy_exhausted(attempts, retry_after, "retry deadline exceeded")
+            attempts += 1
+            try:
+                async with asyncio.timeout(remaining):
+                    response = await self.client.post(
+                        "/api/embed", json=payload, headers=self._authentication_headers()
+                    )
+            except TimeoutError as error:
+                raise self._busy_exhausted(
+                    attempts, retry_after, "retry deadline exceeded"
+                ) from error
+            except httpx.TransportError as error:
+                raise EmbeddingRequestError(type(error).__name__, retryable=True) from error
+
+            retry_after = self._model_busy_retry_after(response)
+            if retry_after is None:
+                return response
+            if attempts >= self.settings.embedding_busy_max_attempts:
+                raise self._busy_exhausted(attempts, retry_after, "attempt limit reached")
+
+            retry_index = attempts - 1
+            jitter_cap = min(
+                self.settings.embedding_busy_backoff_cap_seconds,
+                self.settings.embedding_busy_backoff_base_seconds * 2**retry_index,
+            )
+            delay = max(retry_after, self._uniform(0.0, jitter_cap))
+            remaining = self.settings.embedding_busy_deadline_seconds - (
+                self._monotonic() - started
+            )
+            if delay > remaining:
+                raise self._busy_exhausted(
+                    attempts, retry_after, "retry deadline exceeded"
+                )
+            try:
+                async with asyncio.timeout(remaining):
+                    await self._sleep(delay)
+            except TimeoutError as error:
+                raise self._busy_exhausted(
+                    attempts, retry_after, "retry deadline exceeded"
+                ) from error
+
+    def _model_busy_retry_after(self, response: httpx.Response) -> float | None:
+        if (
+            self.settings.embedding_backend != "pytorch"
+            or self.settings.embedding_api_key is None
+            or response.status_code != 503
+        ):
+            return None
+        retry_after = _retry_after(response.headers.get("Retry-After"))
+        if retry_after is None:
+            return None
+        try:
+            error = response.json()["error"]
+            valid = (
+                error["code"] == "MODEL_BUSY"
+                and error["retryable"] is True
+                and error["requested_model"] == self.settings.embedding_model
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        return retry_after if valid else None
+
+    def _busy_exhausted(
+        self, attempts: int, retry_after: float | None, reason: str
+    ) -> EmbeddingRequestError:
+        retries = max(0, attempts - 1)
+        return EmbeddingRequestError(
+            f"{self.settings.embedding_backend} MODEL_BUSY for model "
+            f"{self.settings.embedding_model!r} after {retries} retries: {reason}",
+            retryable=True,
+            retry_after_seconds=retry_after,
+            retries=retries,
+        )
 
 
 # Backward-compatible import/API name. Both backends expose the Ollama API shape.
