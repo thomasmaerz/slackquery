@@ -342,10 +342,12 @@ class LocalEmbeddingClient:
             return None
         try:
             error = response.json()["error"]
+            requested_model = error["requested_model"]
             valid = (
                 error["code"] == "MODEL_BUSY"
                 and error["retryable"] is True
-                and error["requested_model"] == self.settings.embedding_model
+                and requested_model
+                in {self.settings.embedding_model, "nomic"}
             )
         except (KeyError, TypeError, ValueError):
             return None

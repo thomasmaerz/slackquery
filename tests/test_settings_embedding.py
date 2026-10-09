@@ -339,7 +339,7 @@ def busy_response(
             "error": {
                 "code": code,
                 "retryable": retryable,
-                "requested_model": requested_model or settings.embedding_model,
+                "requested_model": requested_model or "nomic",
             }
         },
     )
