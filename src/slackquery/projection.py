@@ -17,6 +17,7 @@ from pptx import Presentation
 from pypdf import PdfReader
 
 from slackquery.db import connect_state, path_sql
+from slackquery.embedding_identity import DOCUMENT_PREFIX, embedding_content_hash
 from slackquery.models import ProjectionStats
 from slackquery.settings import Settings
 
@@ -434,7 +435,6 @@ def _project_files(
             message = (channel, None, None, None, "0.000000", ts_us, timestamp, None, None, None)
         for index, chunk in enumerate(chunks):
             document_id = f"file:{row[0]}:{row[4]}:{index:06d}"
-            digest = hashlib.sha256(chunk.encode()).hexdigest()
             metadata = {
                 "file_id": str(row[4]),
                 "file_name": row[6],
@@ -447,6 +447,7 @@ def _project_files(
                 f"workspace: {row[1]}\nchannel: {message[1] or message[0]}\n"
                 f"file: {row[6]}\ncontent: {chunk}"
             )
+            digest = embedding_content_hash(embedding)
             _insert_document(
                 connection,
                 [
@@ -557,7 +558,11 @@ def project_documents(
                 '\nauthor: ', coalesce(nullif(u.display_name, ''),
                   nullif(u.real_name, ''), u.username, m.user_id, 'unknown'),
                 '\nmessage: ', coalesce(m.text, '')),
-              ?, m.payload_hash,
+              ?, sha256(? || concat('workspace: ', w.workspace_slug,
+                '\nchannel: ', coalesce(c.name, m.channel_id),
+                '\nauthor: ', coalesce(nullif(u.display_name, ''),
+                  nullif(u.real_name, ''), u.username, m.user_id, 'unknown'),
+                '\nmessage: ', coalesce(m.text, ''))),
               json_object('subtype', m.subtype, 'is_edited', m.is_edited),
               CASE WHEN w.workspace_url IS NULL THEN NULL ELSE
                 rtrim(w.workspace_url, '/') || '/archives/' || m.channel_id || '/p' ||
@@ -572,12 +577,17 @@ def project_documents(
             LEFT JOIN canonical.messages root ON root.workspace_id=m.workspace_id
               AND root.channel_id=m.channel_id AND root.ts=m.thread_ts
             """,
-            [source_identity, now],
+            [source_identity, DOCUMENT_PREFIX, now],
         )
         connection.execute(
             """
-            UPDATE document_projection
-            SET source_identity=?, source_revision=source_version, embedding_recipe=?
+            UPDATE document_projection p
+            SET source_identity=?,
+                source_revision=(
+                  SELECT m.payload_hash FROM canonical.messages m
+                  WHERE m.message_key=p.document_id
+                ),
+                embedding_recipe=?
             WHERE document_kind='message'
               AND document_id IN (SELECT message_key FROM canonical.messages)
             """,

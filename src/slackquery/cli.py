@@ -23,6 +23,7 @@ from slackquery.artifact import (
     validate_artifact,
 )
 from slackquery.embedding import EmbeddingWorker, LocalEmbeddingClient
+from slackquery.maintenance import migrate_embedding_content_hashes, prune_embeddings
 from slackquery.projection import project_documents
 from slackquery.retrieval import SearchEngine
 from slackquery.server import create_asgi_app
@@ -55,6 +56,12 @@ def parser() -> argparse.ArgumentParser:
     benchmark.add_argument("queries", type=Path, help="one query per line")
     benchmark.add_argument("--iterations", type=int, default=1)
     commands.add_parser("retain", help="apply artifact retention policy")
+    migrate = commands.add_parser(
+        "migrate-content-hashes", help="migrate current vectors to stable content hashes"
+    )
+    migrate.add_argument("--apply", action="store_true")
+    gc = commands.add_parser("gc-embeddings", help="audit or delete unreferenced vectors")
+    gc.add_argument("--apply", action="store_true")
     rollback = commands.add_parser("rollback", help="atomically publish a prior build")
     rollback.add_argument("build_id_or_path")
     backup = commands.add_parser("backup", help="checkpoint and back up state DB")
@@ -121,6 +128,10 @@ def main(argv: list[str] | None = None) -> int:
             _print(validate_artifact(args.artifact, verify_checksum=args.checksum))
         elif args.command == "retain":
             _print(retain_artifacts(settings))
+        elif args.command == "migrate-content-hashes":
+            _print(migrate_embedding_content_hashes(settings, apply=args.apply))
+        elif args.command == "gc-embeddings":
+            _print(prune_embeddings(settings, apply=args.apply))
         elif args.command == "rollback":
             _print({"current": str(rollback_artifact(settings, args.build_id_or_path))})
         elif args.command == "backup":

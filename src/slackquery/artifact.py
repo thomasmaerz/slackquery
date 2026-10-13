@@ -518,6 +518,7 @@ def gold_validate(settings: Settings, artifact_path: Path | None = None) -> dict
         "fts_key_coverage": fts_keys[0] == 0,
         "active_key_equality": artifact_keys == active_keys,
         "no_stale_keys": not (artifact_keys - active_keys),
+        "attachment_paths_resolved": extraction.get("missing", 0) == 0,
         "file_presence": extraction.get("extracted", 0) == 0
         or kinds.get("file_chunk", 0) > 0,
         "thread_presence": extraction.get("thread_contexts", 0) == 0

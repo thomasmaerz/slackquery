@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import duckdb
 import httpx
 import pytest
 
 from slackquery.artifact import build_artifact, publish_artifact, validate_artifact
 from slackquery.db import connect_state
 from slackquery.embedding import EmbeddingWorker, OllamaClient
+from slackquery.embedding_identity import embedding_content_hash
+from slackquery.maintenance import migrate_embedding_content_hashes, prune_embeddings
 from slackquery.models import SearchFilters
 from slackquery.projection import project_documents
 from slackquery.retrieval import SearchEngine
@@ -47,7 +50,7 @@ async def test_full_small_pipeline(
         client = OllamaClient(settings, http)
         first = await EmbeddingWorker(settings, client).run()
         second = await EmbeddingWorker(settings, client).run()
-        assert first.succeeded == 4
+        assert first.succeeded == 3
         assert second.claimed == 0
         state = connect_state(settings.state_db)
         try:
@@ -119,8 +122,6 @@ async def test_full_small_pipeline(
 
 
 def test_projection_deduplicates_user_keys(settings: Settings, canonical: Path) -> None:
-    import duckdb
-
     connection = duckdb.connect(str(canonical))
     connection.execute(
         "INSERT INTO users VALUES ('W1', 'U1', 'duplicate', 'Duplicate', 'Duplicate')"
@@ -133,6 +134,92 @@ def test_projection_deduplicates_user_keys(settings: Settings, canonical: Path) 
         assert state.execute("SELECT count(*) FROM document_projection").fetchone() == (4,)
     finally:
         state.close()
+
+
+def test_message_hash_tracks_exact_embedding_input_not_payload(
+    settings: Settings, canonical: Path
+) -> None:
+    project_documents(canonical, settings.state_db, settings)
+    state = connect_state(settings.state_db)
+    try:
+        before = state.execute(
+            "SELECT text_hash, text_embedding FROM document_projection "
+            "WHERE document_id='W1:C2:3.000001'"
+        ).fetchone()
+        assert before is not None
+        assert before[0] == embedding_content_hash(before[1])
+    finally:
+        state.close()
+
+    source = duckdb.connect(str(canonical))
+    source.execute(
+        "UPDATE messages SET payload_hash='volatile-block-id-change' "
+        "WHERE message_key='W1:C2:3.000001'"
+    )
+    source.close()
+    project_documents(canonical, settings.state_db, settings)
+    state = connect_state(settings.state_db)
+    try:
+        after = state.execute(
+            "SELECT text_hash, source_revision FROM document_projection "
+            "WHERE document_id='W1:C2:3.000001'"
+        ).fetchone()
+        assert after == (before[0], "volatile-block-id-change")
+    finally:
+        state.close()
+
+
+def test_migration_and_gc_preserve_current_coverage(
+    settings: Settings, canonical: Path
+) -> None:
+    project_documents(canonical, settings.state_db, settings)
+    state = connect_state(settings.state_db)
+    state.execute(
+        "UPDATE document_projection SET text_hash='legacy-' || document_id "
+        "WHERE is_active AND document_kind='message'"
+    )
+    rows = state.execute(
+        "SELECT document_id, source_version, text_hash FROM document_projection "
+        "WHERE is_active AND document_kind='message'"
+    ).fetchall()
+    state.executemany(
+        """
+        INSERT INTO document_embeddings
+          (document_id, generation_id, source_version, text_hash, embedding,
+           native_dimension, state, attempt_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, 768, 'succeeded', 1, current_timestamp)
+        """,
+        [
+            [document_id, settings.generation_id, version, text_hash, [1.0] + [0.0] * 511]
+            for document_id, version, text_hash in rows
+        ],
+    )
+    state.close()
+
+    preview = migrate_embedding_content_hashes(settings)
+    assert preview == {"eligible": 3, "missing": 0, "migrated": 3, "applied": 0}
+    applied = migrate_embedding_content_hashes(settings, apply=True)
+    assert applied["applied"] == 3
+    assert migrate_embedding_content_hashes(settings, apply=True) == {
+        "eligible": 3,
+        "missing": 0,
+        "migrated": 0,
+        "applied": 0,
+    }
+
+    state = connect_state(settings.state_db)
+    state.execute(
+        """
+        INSERT INTO document_embeddings
+          (document_id, generation_id, source_version, text_hash, embedding,
+           native_dimension, state, attempt_count, updated_at)
+        VALUES ('stale', ?, 'old', 'old', ?, 768, 'succeeded', 1, current_timestamp)
+        """,
+        [settings.generation_id, [1.0] + [0.0] * 511],
+    )
+    state.close()
+    assert prune_embeddings(settings)["stale"] == 4
+    assert prune_embeddings(settings, apply=True)["deleted"] == 4
 
 
 def test_artifact_retry_supersedes_failed_build(

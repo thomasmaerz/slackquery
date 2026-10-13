@@ -21,6 +21,8 @@ def test_cli_commands_are_present() -> None:
         "validate",
         "benchmark",
         "retain",
+        "migrate-content-hashes",
+        "gc-embeddings",
         "rollback",
         "backup",
         "restore",

@@ -17,11 +17,9 @@ import duckdb
 import httpx
 
 from slackquery.db import connect_state
+from slackquery.embedding_identity import DOCUMENT_PREFIX, QUERY_PREFIX
 from slackquery.models import EmbedStats
 from slackquery.settings import Settings
-
-DOCUMENT_PREFIX = "search_document: "
-QUERY_PREFIX = "search_query: "
 
 
 class EmbeddingValidationError(ValueError):
@@ -428,7 +426,8 @@ class EmbeddingWorker:
             LEFT JOIN document_embeddings e
               ON e.document_id = p.document_id AND e.generation_id = ?
                  AND e.text_hash = p.text_hash
-            WHERE p.is_active AND e.document_id IS NULL
+            WHERE p.is_active AND p.document_kind IN ('message', 'file_chunk')
+              AND e.document_id IS NULL
             """,
             [self.settings.generation_id, self.settings.generation_id],
         )
@@ -438,7 +437,8 @@ class EmbeddingWorker:
                    e.attempt_count
             FROM document_embeddings e
             JOIN document_projection p USING (document_id, source_version, text_hash)
-            WHERE e.generation_id = ? AND p.is_active AND (
+            WHERE e.generation_id = ? AND p.is_active
+              AND p.document_kind IN ('message', 'file_chunk') AND (
               e.state = 'pending'
               OR (e.state = 'retryable_failed' AND
                   coalesce(e.next_attempt_at, current_timestamp) <= current_timestamp)
@@ -542,6 +542,13 @@ class EmbeddingWorker:
                             succeeded += 1
                 except (EmbeddingRequestError, EmbeddingValidationError) as error:
                     is_retryable = isinstance(error, EmbeddingRequestError) and error.retryable
+                    if status is not None:
+                        retries = error.retries if isinstance(error, EmbeddingRequestError) else 0
+                        status(
+                            "embedding request failed "
+                            f"(error={type(error).__name__} detail={str(error)[:200]!r} "
+                            f"retryable={is_retryable} retries={retries})"
+                        )
                     for item in batch:
                         terminal = (
                             not is_retryable
