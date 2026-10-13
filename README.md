@@ -133,6 +133,16 @@ curl -fsS http://localhost:8181/readyz
 Compose starts the read-only MCP service. Run projection, embedding, build, and
 publication from a writer process or through the included Dagster definitions.
 
+### Incremental embedding identity
+
+Message vectors are keyed by a SHA-256 hash of the exact UTF-8 document input
+sent to the model, including the `search_document: ` task prefix. Slack payload
+metadata remains source lineage, but volatile fields such as regenerated Block
+Kit `block_id` values do not invalidate an otherwise unchanged vector. After an
+incremental ingestion, only new messages, meaningful changes to the constructed
+embedding text, and new or changed attachment chunks are embedded. Thread-context
+documents remain available to lexical/context retrieval and are not vectorized.
+
 ## Embedding backends
 
 Both transports use the same `/api/embed` request shape. Switching transport is

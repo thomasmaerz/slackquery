@@ -176,6 +176,34 @@ Every asset logs start/finish lines and the embedding worker logs per-batch
 progress, mirrored to both the run event log and the captured stdout tab.
 Sensor evaluations log their decisions to the tick log.
 
+Embedding identity is based on the exact prefixed model input, not the raw Slack
+JSON payload. An unchanged projection should therefore finish with `claimed=0`.
+Payload-only changes such as regenerated Block Kit IDs must not enqueue work;
+new messages and meaningful message/author/channel text changes do.
+
+For installations upgrading from payload-based hashes, back up state and run:
+
+```bash
+slackquery migrate-content-hashes          # dry-run
+slackquery migrate-content-hashes --apply
+slackquery project
+slackquery embed
+slackquery build
+slackquery gold-validate /path/to/candidate.duckdb
+slackquery publish /path/to/candidate.duckdb
+slackquery gc-embeddings                   # dry-run
+slackquery gc-embeddings --apply
+```
+
+The migration copies only current, proven vectors to stable identities. Garbage
+collection refuses to run unless every active message and file chunk has a valid
+current vector. Keep the state backup and previous immutable artifact until the
+new artifact has been exercised in production.
+
+The attachment root must expose the same Slackdump tree used by Slackpipe. Gold
+validation blocks publication when canonical local attachment paths cannot be
+resolved, preventing a mount regression from silently dropping file chunks.
+
 In another Dagster deployment, load the module as a code location and inject
 local paths/endpoints through its environment. Keep only one writer active
 for a given state database and artifact directory.

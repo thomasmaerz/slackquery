@@ -169,6 +169,58 @@ def test_message_hash_tracks_exact_embedding_input_not_payload(
         state.close()
 
 
+@pytest.mark.asyncio
+async def test_incremental_embedding_claims_only_new_content(
+    settings: Settings, canonical: Path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"embeddings": [[1.0] + [0.0] * 767 for _ in payload["input"]]},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://ollama"
+    ) as http:
+        worker = EmbeddingWorker(settings, OllamaClient(settings, http))
+        project_documents(canonical, settings.state_db, settings)
+        initial = await worker.run()
+        assert (initial.claimed, initial.succeeded) == (3, 3)
+
+        source = duckdb.connect(str(canonical))
+        source.execute(
+            "UPDATE messages SET payload_hash='new-random-block-id' "
+            "WHERE message_key='W1:C2:3.000001'"
+        )
+        source.close()
+        project_documents(canonical, settings.state_db, settings)
+        payload_only = await worker.run()
+        assert payload_only.claimed == 0
+
+        source = duckdb.connect(str(canonical))
+        source.execute(
+            """
+            INSERT INTO messages VALUES
+              ('W1:C2:5.000001', 'W1', 'C2', '5.000001', 5000001, 'U2', NULL,
+               'A genuinely new message', 'A genuinely new message', NULL,
+               false, false, false, false, false, 'h5', 'run2', current_timestamp)
+            """
+        )
+        source.close()
+        project_documents(canonical, settings.state_db, settings)
+        incremental = await worker.run()
+        assert (incremental.claimed, incremental.succeeded) == (1, 1)
+
+    state = connect_state(settings.state_db)
+    try:
+        assert state.execute(
+            "SELECT count(*) FROM document_embeddings WHERE state='succeeded'"
+        ).fetchone() == (4,)
+    finally:
+        state.close()
+
+
 def test_migration_and_gc_preserve_current_coverage(
     settings: Settings, canonical: Path
 ) -> None:
